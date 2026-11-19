@@ -2,7 +2,7 @@ class CPU6507:
     def __init__(self, rom_data):
         self.memory = bytearray(0x2000)
         self.memory[0x1000:0x2000] = rom_data
-
+        self.cycles = 0
         self.A = 0x00
         self.X = 0x00
         self.Y = 0x00
@@ -54,6 +54,11 @@ class CPU6507:
             0x2D: (self.AND, self.mode_ABS, 4),
             0x3D: (self.AND, self.mode_ABX, 4),
             0xA0: (self.LDY, self.mode_IMM, 2),
+            0Xc9: (self.CMP, self.mode_IMM, 2),
+            0xB0: (self.BCS, self.mode_REL, 2),
+            0x90: (self.BCC, self.mode_REL, 2),
+            0xA6: (self.LDX, self.mode_ZP, 3),
+            0xF0: (self.BEQ, self.mode_REL, 2), 
         }
 
     # --- Geheugen & Helpers ---
@@ -236,6 +241,33 @@ class CPU6507:
     def AND(self, addr):
         self.A =  self.A & self.read(addr)
         self.update_zn(self.A)
+
+    def CMP(self, addr):
+        val = self.read(addr)
+        result = (self.A - val) & 0xFF
+
+        # Let op: Carry (C) is 1 als A >= val (geen 'borrow' nodig!)
+        self.flags['C'] = 1 if self.A >= val else 0
+        self.update_zn(result)
+
+    def BCS(self, addr):
+        if self.flags['C'] == 1:
+            self.PC = addr;
+
+    def BCC(self, addr):
+        if self.flags['C'] == 0:
+            self.PC = addr;
+
+    def BEQ(self, addr):
+        if self.flags['Z'] == 1:
+            # +1 cycle omdat de sprong wordt genomen
+            self.cycles += 1
+            
+            # +1 extra cycle als de high byte (de 'page') verandert
+            if (self.PC & 0xFF00) != (addr & 0xFF00):
+                self.cycles += 1
+                
+            self.PC = addr
 
     # --- De hoofd-stap ---
     def step(self):
