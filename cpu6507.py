@@ -41,6 +41,19 @@ class CPU6507:
             0x06: (self.ASL, self.mode_ZP,  5),
             0x16: (self.ASL, self.mode_ZPX, 6),
             0x0E: (self.ASL, self.mode_ABS, 6),
+            0xBD: (self.LDA, self.mode_ABX, 4),
+            0x4A: (self.LSR, self.mode_ACC, 2),
+            0x46: (self.LSR, self.mode_ZP,  5),
+            0x56: (self.LSR, self.mode_ZPX, 6),
+            0x4E: (self.LSR, self.mode_ABS, 6),
+            0x48: (self.PHA, self.mode_IMP, 3),
+            0x68: (self.PLA, self.mode_IMP, 4),
+            0x29: (self.AND, self.mode_IMM, 2),
+            0x25: (self.AND, self.mode_ZP,  3),
+            0x35: (self.AND, self.mode_ZPX, 4),
+            0x2D: (self.AND, self.mode_ABS, 4),
+            0x3D: (self.AND, self.mode_ABX, 4),
+            0xA0: (self.LDY, self.mode_IMM, 2),
         }
 
     # --- Geheugen & Helpers ---
@@ -87,6 +100,18 @@ class CPU6507:
         high = self.fetch_byte()
         return (high << 8) | low
 
+    def mode_ABX(self):
+        low = self.fetch_byte()
+        high = self.fetch_byte()
+        base_addr = (high << 8) | low
+        return (base_addr + self.X) & 0xFFFF
+
+    def mode_ABY(self):
+        low = self.fetch_byte()
+        high = self.fetch_byte()
+        base_addr = (high << 8) | low
+        return (base_addr + self.Y) & 0xFFFF
+
     def mode_REL(self):
         offset = self.fetch_byte()
         # Zet unsigned byte (0..255) om naar signed (-128..127)
@@ -108,6 +133,10 @@ class CPU6507:
     def LDX(self, addr):
         self.X = self.read(addr)
         self.update_zn(self.X)
+
+    def LDY(self, addr):
+        self.Y = self.read(addr)
+        self.update_zn(self.Y)
 
     def STA(self, addr):
         self.write(addr, self.A)
@@ -178,7 +207,36 @@ class CPU6507:
             self.A = result
         else:
             self.write(addr, result)
+
+    def LSR (self, addr):
+        if addr is None:
+            val = self.A
+        else:
+            val = self.read(addr)
+
+        # Bit 0 (het meest rechtse bit) gaat naar de Carry-flag
+        self.flags['C'] = val & 0x01
+
+        # Schuif 1 bit naar rechts (bit 7 wordt automatisch 0)
+        result = val >> 1
+        self.update_zn(result)
+
+        if addr is None:
+            self.A = result
+        else:
+            self.write(addr, result)
     
+    def PHA(self, addr):
+        self.push_byte(self.A)
+
+    def PLA(self, addr):
+        self.A = self.pull_byte()
+        self.update_zn(self.A)
+
+    def AND(self, addr):
+        self.A =  self.A & self.read(addr)
+        self.update_zn(self.A)
+
     # --- De hoofd-stap ---
     def step(self):
         opcode = self.fetch_byte()
