@@ -1,5 +1,11 @@
+from tia import TIA
+from riot import RIOT
+
 class CPU6507:
     def __init__(self, rom_data):
+        self.tia = TIA()
+        self.riot = RIOT()
+
         self.memory = bytearray(0x2000)
         self.memory[0x1000:0x2000] = rom_data
         self.cycles = 0
@@ -134,10 +140,21 @@ class CPU6507:
         }
 
     def read(self, address):
+        address &= 0x1FFF
+        if (address & 0x1000) == 0 and (address & 0x0080) != 0 and (address & 0x0200) != 0:
+            return self.riot.read(address)
         return self.memory[address & 0x1FFF]
 
     def write(self, address, value):
         addr = address & 0x1FFF
+        if (addr & 0x1000) == 0 and (addr & 0x0080) == 0:
+            self.tia.write(addr, value)
+            return
+        
+        if (address & 0x1000) == 0 and (address & 0x0080) != 0 and (address & 0x0200) != 0:
+            self.riot.write(address, value)
+            return
+
         if addr < 0x1000:
             self.memory[addr] = value & 0xFF
 
@@ -515,6 +532,16 @@ class CPU6507:
     def NOP(self, addr):
         # Just burning up some cycles:)
         pass
+
+    def step_frame(self):
+        self.tia.frame_ready = False
+        while not self.tia.frame_ready:
+            if self.tia.wsync:
+                # CPU staat stil tot het einde van de huidige scanline
+                self.tia.step(3)
+            else:
+                cycles = self.step()  # Jouw bestaande methode die 1 instructie uitvoert
+                self.tia.step(cycles * 3) 
     
     # --- De hoofd-stap ---
     def step(self):

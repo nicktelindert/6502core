@@ -1,32 +1,22 @@
-import argparse
 import sys
 from cpu6507 import CPU6507
+from display import Display
 
 def main():
-    parser = argparse.ArgumentParser(description="Atari 2600 Emulator")
-    parser.add_argument("rom", help="Pad naar het ROM-bestand (bijv. pitfall.bin)")
-    args = parser.parse_args()
+    rom_path = sys.argv[1]
 
-    try:
-        with open(args.rom, "rb") as f:
-            rom_data = f.read()
-    except FileNotFoundError:
-        print(f"Fout: Kan het bestand '{args.rom}' niet vinden.")
-        sys.exit(1)
-
-    if len(rom_data) != 4096:
-        print(f"Waarschuwing: ROM is {len(rom_data)} bytes (standaard Atari 2600 ROM is 4096 bytes).")
+    with open(rom_path, "rb") as f:
+        rom_data = f.read()
 
     cpu = CPU6507(rom_data)
-    print(f"ROM '{args.rom}' geladen. Startadres (PC): {hex(cpu.PC)}")
+    display = Display(scale=4)
 
-    stappen = 0
-    try:
-        while True:
-            cpu.step()
-            stappen += 1
-    except NotImplementedError as e:
-        print(f"Gestopt na {stappen} uitgevoerde instructies -> {e}")
+    running = True
+    while running:
+        cpu.step_frame()
+        running = display.render(cpu.tia.framebuffer)
+
+    display.close()
 
 if __name__ == "__main__":
     main()
