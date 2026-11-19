@@ -1,76 +1,48 @@
-# Atari 2600 Emulator (Python)
+# Atari 2600 Emulator (MOS 6507)
 
-> **⚠️ Let op:** Dit is een **leerproject** om op laag niveau te begrijpen hoe hardware- en CPU-emulatie werkt. Er is op dit moment nog geen beeld (TIA) of geluid geïmplementeerd, en **geen enkele ROM is momenteel speelbaar**.
+Een minimalistische, headless Atari 2600-emulator gebouwd in Python als leerproject om de architectuur van de **MOS 6507 CPU** en retro-hardware op instructie- en geheugenniveau te doorgronden.
 
-## Over dit project
+## Architectuur & Ontwerpdoelen
+* **Headless-first:** Geen complexe GUI tijdens de CPU-ontwikkelfase; volledige focus op zuivere instructielogica, registers, status-flags en geheugenadressering.
+* **MOS 6507 CPU:** Implementatie van de 6502-variant met een 13-bit adresbus (`8 KB` adresruimte via `& 0x1FFF`).
+* **ROM-ondersteuning:** Direct laden van `.A26` ROM-bestanden.
+* **Cycle-voorbereiding:** Opcode-tabellen bevatten nu al basis-cyclewaarden ter voorbereiding op de latere integratie met de **TIA** (*Television Interface Adaptor*) en *racing the beam*-timing.
 
-Dit project is een *low-level* Atari 2600-emulator geschreven in Python. Het doel is om stap voor stap de architectuur van de console na te bouwen — te beginnen bij de **MOS 6507 CPU** (een uitgeklede variant van de beroemde 6502-processor met een 13-bits adresbus van maximaal 8 KB).
+## Voortgang
+* **Huidige mijlpaal:** Meer dan **1.305 uitgevoerde instructies** in *Pitfall!* (`pitfall.A26`).
+* **Werkwijze:** Iteratieve opbouw waarbij ontbrekende opcodes stapsgewijs worden geanalyseerd en toegevoegd zodra de ROM ze aanroept.
 
-### Visie op de gebruikerservaring
+## Geïmplementeerde Onderdelen (`cpu6507.py`)
 
-In tegenstelling tot traditionele emulators met uitgebreide menubalken en instellingenschermen, is het ontwerpdoel een directe, minimalistische ervaring:
+### Registers & Flags
+* **Registers:** `A` (Accumulator), `X`, `Y`, `SP` (Stack Pointer), `PC` (Program Counter)
+* **Processor Status Flags:** `N` (Negative), `V` (Overflow), `B` (Break), `D` (Decimal), `I` (Interrupt Disable), `Z` (Zero), `C` (Carry)
 
-* Geen overbodige UI of menu's.
-* Direct een ROM openen via bestandsassociatie met `.A26`-bestanden.
-* Een subtiele melding bij het opstarten met toegang tot een `F1`-overlay die uitsluitend de keybindings toont.
+### Addressing Modes
+* `mode_IMP` (Implied)
+* `mode_IMM` (Immediate)
+* `mode_ZP` (Zero Page)
+* `mode_ZPX` (Zero Page, X)
+* `mode_ABS` (Absolute)
+* `mode_ABX` (Absolute, X)
+* `mode_REL` (Relative — inclusief signed two's complement offset-berekening)
 
-## Gebruik (ROM inladen)
-
-Zorg ervoor dat je Python 3 geïnstalleerd hebt en dat je ROM-bestand eindigt op `.A26` (standaard 4096 bytes). Je geeft het pad naar het `.A26`-bestand mee als argument in de terminal:
-
-```bash
-python main.py pitfall.A26
-```
-
-Omdat de CPU nog in ontwikkeling is, zal het programma de instructies uitvoeren totdat het een opcode tegenkomt die nog niet is geïmplementeerd (inmiddels worden er al ruim 1.200 instructies van *Pitfall!* succesvol doorlopen), en vervolgens stoppen met een melding over het betreffende adres en de ontbrekende opcode.
-
-## Huidige Status & Geïmplementeerde Opcodes
-
-De geheugen-mapping (8 KB adresruimte met mirroring, RAM, en 4 KB cartridge ROM op `$1000`–`$1FFF` / `$F000`–`$FFFF`), de Reset Vector (`$FFFC`/`$FFFD`), de registers (`A`, `X`, `Y`, `SP`, `PC`), de belangrijkste addressing modes (`IMM`, `ZP`, `ZPX`, `ABS`, `ABX`, `REL`, `IMP`, `ACC`) en de status-flags zijn opgezet.
-
-### Geïmplementeerde 6507 Instructies
-
-| Opcode | Instructie | Addressing Mode | Beschrijving |
-| :--- | :--- | :--- | :--- |
-| `0x0A` | `ASL` | Accumulator | *Arithmetic Shift Left* (bits in `A` één plek naar links) |
-| `0x10` | `BPL` | Relative | *Branch if Plus* (spring indien `N == 0`) |
-| `0x20` | `JSR` | Absolute | *Jump to Subroutine* (bewaart terugkeeradres op stack) |
-| `0x29` | `AND` | Immediate | *Logical AND* (bitwise `A & waarde`) |
-| `0x30` | `BMI` | Relative | *Branch if Minus* (spring indien `N == 1`) |
-| `0x48` | `PHA` | Implied | *Push Accumulator* (duw `A` op de stack) |
-| `0x4A` | `LSR` | Accumulator | *Logical Shift Right* (bits in `A` één plek naar rechts) |
-| `0x60` | `RTS` | Implied | *Return from Subroutine* (keert terug van subroutine) |
-| `0x68` | `PLA` | Implied | *Pull Accumulator* (haal `A` van de stack) |
-| `0x78` | `SEI` | Implied | *Set Interrupt Disable* (zet `I`-flag op 1) |
-| `0x84` | `STY` | Zero Page | *Store Y Register* (schrijf `Y` naar Zero Page) |
-| `0x85` | `STA` | Zero Page | *Store Accumulator* (schrijf `A` naar Zero Page) |
-| `0x86` | `STX` | Zero Page | *Store X Register* (schrijf `X` naar Zero Page) |
-| `0x90` | `BCC` | Relative | *Branch if Carry Clear* (spring indien `C == 0`) |
-| `0x95` | `STA` | Zero Page, X | *Store Accumulator* (schrijf `A` naar `adres + X`) |
-| `0x9A` | `TXS` | Implied | *Transfer X to Stack Pointer* |
-| `0xA0` | `LDY` | Immediate | *Load Y Register* (laad directe waarde in `Y`) |
-| `0xA2` | `LDX` | Immediate | *Load X Register* (laad directe waarde in `X`) |
-| `0xA5` | `LDA` | Zero Page | *Load Accumulator* (laad waarde uit Zero Page in `A`) |
-| `0xA9` | `LDA` | Immediate | *Load Accumulator* (laad directe waarde in `A`) |
-| `0xAD` | `LDA` | Absolute | *Load Accumulator* (laad waarde uit 16-bit adres in `A`) |
-| `0xB0` | `BCS` | Relative | *Branch if Carry Set* (spring indien `C == 1`) |
-| `0xB5` | `LDA` | Zero Page, X | *Load Accumulator* (laad waarde uit `adres + X` in `A`) |
-| `0xBD` | `LDA` | Absolute, X | *Load Accumulator* (laad waarde uit `16-bit adres + X` in `A`) |
-| `0xC9` | `CMP` | Immediate | *Compare Accumulator* (vergelijk `A` met waarde en zet flags) |
-| `0xCA` | `DEX` | Implied | *Decrement X Register* (`X = X - 1`) |
-| `0xD0` | `BNE` | Relative | *Branch if Not Equal* (spring indien `Z == 0`) |
-| `0xD8` | `CLD` | Implied | *Clear Decimal Mode* (zet `D`-flag op 0) |
-| `0xE8` | `INX` | Implied | *Increment X Register* (`X = X + 1`) |
-| `0xF0` | `BEQ` | Relative | *Branch if Equal* (spring indien `Z == 1`) |
-
-*(Eventuele extra toegevoegde geheugen-varianten van instructies zoals `ASL`, `LSR`, `AND`, `CMP`, `STX`, `STY` of `LDY` kunnen hier eenvoudig aan worden toegevoegd.)*
+### Geïmplementeerde Opcodes
+| Categorie | Instructies | Opcodes (o.a.) |
+| :--- | :--- | :--- |
+| **Load / Store** | `LDA`, `LDX`, `LDY`, `STA`, `STX`, `STY` | `0xA9`, `0xA5`, `0xAD`, `0xBD`, `0xA2`, `0xA0`, `0x85`, `0x86`, `0x84` |
+| **Rekenkundig** | `ADC` | `0x69`, `0x65`, `0x75`, `0x6D` |
+| **Logisch & Shifts** | `AND`, `EOR`, `LSR` | `0x29`, `0x45`, `0x4A` |
+| **Vergelijkingen** | `CMP`, `CPX`, `CPY` | `0xC9`, `0xE0`, `0xE4`, `0xEC`, `0xC0`, `0xC4`, `0xCC` |
+| **Branches** | `BNE`, `BEQ`, `BPL`, `BMI`, `BCS`, `BCC` | `0xD0`, `0xF0`, `0x10`, `0x30`, `0xB0`, `0x90` |
+| **Stack** | `PHA`, `PLA` | `0x48`, `0x68` |
+| **Flags & Status** | `CLC`, `SEC`, `SEI`, `CLD` | `0x18`, `0x38`, `0x78`, `0xD8` |
+| **Control & Overig** | `JMP`, `JSR`, `RTS`, `INX`, `DEX`, `INY`, `DEY`, `TXS`, `NOP` | `0x4C`, `0x20`, `0x60`, `0xE8`, `0xCA`, `0xC8`, `0x88`, `0x9A`, `0xEA` |
 
 ## Roadmap
-
-* [x] Basis 6507 CPU-architectuur, geheugen-mirroring en stack
-* [x] CLI ROM-loader (`main.py`) voor `.A26`-bestanden
-* [ ] Resterende benodigde 6507 opcodes toevoegen *(in uitvoering — 1.200+ instructies succesvol)*
-* [ ] CPU-cycles nauwkeurig bijhouden voor synchronisatie
-* [ ] **RIOT-chip** emuleren (timers en joystick/schakelaar-input)
-* [ ] **TIA-chip** emuleren (scanline-rendering en NTSC/PAL kleurenpalet)
-* [ ] Minimalistisch venster met `F1` keybinding-overlay en `.A26` bestandsassociatie
+- [x] Basis CPU-structuur, geheugenbus (8 KB) en stack-operaties
+- [x] Kernset van load/store-, vergelijkings-, logische en branch-opcodes
+- [x] Eerste rekenkundige optelling (`ADC`) en carry-afhandeling
+- [ ] Volledige 6507-instructieset afmaken via *Pitfall!*
+- [ ] Cycle-teller activeren en koppelen aan scanline-timing
+- [ ] TIA-registers en basis beeldopbouw implementeren

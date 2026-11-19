@@ -55,10 +55,23 @@ class CPU6507:
             0x3D: (self.AND, self.mode_ABX, 4),
             0xA0: (self.LDY, self.mode_IMM, 2),
             0Xc9: (self.CMP, self.mode_IMM, 2),
+            0xE0: (self.CPX, self.mode_IMM, 2),
+            0xE4: (self.CPX, self.mode_ZP,  3),
+            0xEC: (self.CPX, self.mode_ABS, 4),
+            0xC0: (self.CPY, self.mode_IMM, 2),
+            0xC4: (self.CPY, self.mode_ZP,  3),
+            0xCC: (self.CPY, self.mode_ABS, 4),
             0xB0: (self.BCS, self.mode_REL, 2),
             0x90: (self.BCC, self.mode_REL, 2),
             0xA6: (self.LDX, self.mode_ZP, 3),
-            0xF0: (self.BEQ, self.mode_REL, 2), 
+            0xF0: (self.BEQ, self.mode_REL, 2),
+            0x45: (self.EOR, self.mode_ZP, 3),
+            0x18: (self.CLC, self.mode_IMP, 2),
+            0x38: (self.SEC, self.mode_IMP, 2),
+            0x69: (self.ADC, self.mode_IMM, 2),
+            0x65: (self.ADC, self.mode_ZP,  3),
+            0x75: (self.ADC, self.mode_ZPX, 4),
+            0x6D: (self.ADC, self.mode_ABS, 4),
         }
 
     # --- Geheugen & Helpers ---
@@ -250,6 +263,22 @@ class CPU6507:
         self.flags['C'] = 1 if self.A >= val else 0
         self.update_zn(result)
 
+    def CPX(self, addr):
+        val = self.read(addr)
+        result = (self.X - val) & 0xFF
+        
+        # Carry (C) is 1 als X >= val
+        self.flags['C'] = 1 if self.X >= val else 0
+        self.update_zn(result)
+
+    def CPY(self, addr):
+        val = self.read(addr)
+        result = (self.Y - val) & 0xFF
+        
+        # Carry (C) is 1 als Y >= val
+        self.flags['C'] = 1 if self.Y >= val else 0
+        self.update_zn(result)     
+
     def BCS(self, addr):
         if self.flags['C'] == 1:
             self.PC = addr;
@@ -268,6 +297,34 @@ class CPU6507:
                 self.cycles += 1
                 
             self.PC = addr
+    
+    def EOR(self, addr):
+        self.A = self.A ^ self.read(addr)
+        self.update_zn(self.A)
+    
+    def CLC(self, addr):
+        self.flags['C'] = 0
+
+    def SEC(self, addr):
+        self.flags['C'] = 1
+    
+    def ADC(self, addr):
+        val = self.read(addr)
+        carry_in = self.flags['C']
+
+        # Tel A, de gelezen waarde en de huidige Carry bij elkaar op
+        total = self.A + val + carry_in
+        result = total & 0xFF
+
+        # Carry (C): 1 als de som boven 255 (0xFF) uitkomt
+        self.flags['C'] = 1 if total > 0xFF else 0
+
+        # Overflow (V): 1 als twee getallen met hetzelfde teken een resultaat met het omgekeerde teken geven
+        # (bijv. 127 + 1 = -128 in signed 8-bit)
+        self.flags['V'] = 1 if (~(self.A ^ val) & (self.A ^ result) & 0x80) else 0
+
+        self.A = result
+        self.update_zn(self.A)
 
     # --- De hoofd-stap ---
     def step(self):
