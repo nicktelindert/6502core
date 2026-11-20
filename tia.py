@@ -44,8 +44,7 @@ class TIA:
         self.p0_x = 0       # Horizontale positie (0..159)
         self.p1_x = 0
         self.nusiz0 = 0x00  # $04: Number-Size Player/Missile 0
-        self.nusiz1 = 0x01  # $05: Number-Size Player/Missile 1
-        self.nusiz1 = 0x00
+        self.nusiz1 = 0x00  # $05: Number-Size Player/Missile 1
         self.refp0 = 0x00   # $0B: Reflect Player 0 (bit 3)
         self.refp1 = 0x00   # $0C: Reflect Player 1 (bit 3)
         self.vdelp0 = 0x00  # $25: Vertical Delay Player 0
@@ -80,7 +79,7 @@ class TIA:
         self.cxblpf = 0x00
         self.cxppmm = 0x00
 
-        # Input latches (1 = niet ingedrukt)
+        # Input latches (bit 7 = 1 betekent niet ingedrukt)
         self.inpt4 = 0x80   # $0C: Player 0 fire button
         self.inpt5 = 0x80   # $0D: Player 1 fire button
 
@@ -164,15 +163,19 @@ class TIA:
         elif reg == 0x0F:  # PF2
             self.pf2 = v
         elif reg == 0x10:  # RESP0
-            self.p0_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
+            self.p0_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 0
+            if self.resmp0:
+                self.m0_x = (self.p0_x + 4) % 160
         elif reg == 0x11:  # RESP1
-            self.p1_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
+            self.p1_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 0
+            if self.resmp1:
+                self.m1_x = (self.p1_x + 4) % 160
         elif reg == 0x12:  # RESM0
-            self.m0_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
+            self.m0_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 0
         elif reg == 0x13:  # RESM1
-            self.m1_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
+            self.m1_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 0
         elif reg == 0x14:  # RESBL
-            self.bl_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
+            self.bl_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 0
         elif reg == 0x1B:  # GRP0
             self.grp0 = v
             self.grp1_old = self.grp1
@@ -203,19 +206,23 @@ class TIA:
         elif reg == 0x27:  # VDELBL
             self.vdelbl = v & 0x01
         elif reg == 0x28:  # RESMP0
-            self.resmp0 = v & 0x02
-            if self.resmp0:
+            if self.resmp0 or (v & 0x02):
                 self.m0_x = (self.p0_x + 4) % 160
+            self.resmp0 = v & 0x02
         elif reg == 0x29:  # RESMP1
-            self.resmp1 = v & 0x02
-            if self.resmp1:
+            if self.resmp1 or (v & 0x02):
                 self.m1_x = (self.p1_x + 4) % 160
+            self.resmp1 = v & 0x02
         elif reg == 0x2A:  # HMOVE
             self.p0_x = (self.p0_x + self._hm_offset(self.hmp0)) % 160
             self.p1_x = (self.p1_x + self._hm_offset(self.hmp1)) % 160
-            if not self.resmp0:
+            if self.resmp0:
+                self.m0_x = (self.p0_x + 4) % 160
+            else:
                 self.m0_x = (self.m0_x + self._hm_offset(self.hmm0)) % 160
-            if not self.resmp1:
+            if self.resmp1:
+                self.m1_x = (self.p1_x + 4) % 160
+            else:
                 self.m1_x = (self.m1_x + self._hm_offset(self.hmm1)) % 160
             self.bl_x = (self.bl_x + self._hm_offset(self.hmbl)) % 160
         elif reg == 0x2B:  # HMCLR
@@ -399,10 +406,13 @@ class TIA:
         self.clock += color_clocks
         while self.clock >= 228:
             self._render_up_to_clock(228)
-            self.clock -= 228
+            if self.wsync:
+                self.clock = 0
+                self.wsync = False
+            else:
+                self.clock -= 228
             self.rendered_clock = 0
             self.scanline += 1
-            self.wsync = False
             if self.scanline >= 262:
                 self.scanline = 0
 

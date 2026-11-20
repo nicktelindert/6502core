@@ -270,8 +270,7 @@ class CPU6507:
             return
         if (addr & 0x0080) == 0:
             if self.pending_tia_clocks > 0:
-                clocks_before_write = self.pending_tia_clocks
-                self.tia.step(clocks_before_write)
+                self.tia.step(self.pending_tia_clocks)
                 self.pending_tia_clocks = 0
             self.tia.write(addr & 0x3F, value)
         elif (addr & 0x0200) == 0:
