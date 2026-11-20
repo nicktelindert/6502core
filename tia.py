@@ -20,10 +20,9 @@ class TIA:
 
     def __init__(self):
         # Bovenaan in TIA.__init__:
-        self._dbg_cooldown = 0
-        self._logged_p0fb_since_clear = False
-        self._prev_p0_top_y = None
         self._frame_p0_top_y = None
+        self.debug_p0_x = 0
+        self.debug_p1_x = 0
         self._logged_fall_trigger = False
         self._last_logged_p0_x = None
         # Sync & Control
@@ -143,8 +142,6 @@ class TIA:
         if reg == 0x00:
             if (v & 0x02) and not (self.vsync & 0x02):
                 self.scanline = 0
-                if self._dbg_cooldown > 0:
-                    self._dbg_cooldown -= 1
             self.vsync = v
 
         if reg == 0x00:    # VSYNC
@@ -154,7 +151,6 @@ class TIA:
         elif reg == 0x01:  # VBLANK
             self.vblank = v
         elif reg == 0x02:  # WSYNC
-            self._logged_p0fb_since_clear = False
             self.wsync = True
 
         elif reg == 0x04:  # NUSIZ0
@@ -182,13 +178,13 @@ class TIA:
         elif reg == 0x0F:  # PF2
             self.pf2 = v
         elif reg == 0x10:  # RESP0
-            self.p0_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 3
+            self.p0_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
             if self.resmp0:
-                self.m0_x = (self.p0_x + 4) % 160
+                self.m0_x = (self.p0_x + 5) % 160
         elif reg == 0x11:  # RESP1
-            self.p1_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 3
+            self.p1_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
             if self.resmp1:
-                self.m1_x = (self.p1_x + 4) % 160
+                self.m1_x = (self.p1_x + 5) % 160
         elif reg == 0x12:  # RESM0
             self.m0_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
         elif reg == 0x13:  # RESM1
@@ -473,6 +469,12 @@ class TIA:
     def step(self, color_clocks):
         """Laat de TIA 'color_clocks' vooruitlopen (3x CPU cycles)."""
         self.clock += color_clocks
+
+        if 40 <= self.scanline <= 190:
+            if self.grp0 != 0:
+                self.debug_p0_x = self.p0_x
+            if self.grp1 != 0:
+                self.debug_p1_x = self.p1_x
         while self.clock >= 228:
             self._render_up_to_clock(228)
             if self.wsync:
@@ -486,8 +488,7 @@ class TIA:
                 self.scanline = 0
                 self.frame_ready = True
                 top_y = self._frame_p0_top_y
-                if top_y is not None:
-                    self._prev_p0_top_y = top_y
+
 
     def ntsc_to_rgb(self, color_byte):
         hue = (color_byte >> 4) & 0x0F

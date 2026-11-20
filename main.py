@@ -47,7 +47,7 @@ def main():
         # Voorbeeld van compacte debug-regels in je F1-overlay:
         display.set_debug_lines([
             f"SL:{cpu.tia.scanline:3d}  CLK:{cpu.tia.clock:3d}",
-            f"P0:{cpu.tia.p0_x:3d} (HM:{cpu.tia.hmp0 >> 4:X}) | P1:{cpu.tia.p1_x:3d} (HM:{cpu.tia.hmp1 >> 4:X})",
+            f"P0:{cpu.tia.debug_p0_x:3d}, (HM:{cpu.tia.hmp0 >> 4:X}) | P1:{cpu.tia.debug_p1_x:3d} (HM:{cpu.tia.hmp1 >> 4:X})",
             f"M0:{cpu.tia.m0_x:3d} (HM:{cpu.tia.hmm0 >> 4:X}) | M1:{cpu.tia.m1_x:3d} (HM:{cpu.tia.hmm1 >> 4:X}) | BL:{cpu.tia.bl_x:3d} (HM:{cpu.tia.hmbl >> 4:X})",
         ])
 

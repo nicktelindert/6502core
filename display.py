@@ -15,7 +15,6 @@ class Display:
     def set_debug_lines(self, debug):
         self.debug_lines = debug
 
-
     def render(self, framebuffer):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:

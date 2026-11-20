@@ -748,8 +748,6 @@ class CPU6507:
         while not self.tia.frame_ready:
             if self.tia.wsync:
                 remaining = 228 - self.tia.clock
-                if remaining <= 0:
-                    remaining = 228
                 self.tia.step(remaining)
                 self.riot.step(max(1, remaining // 3))
             else:
@@ -773,14 +771,17 @@ class CPU6507:
         instruction, mode, cycles = self.opcodes[opcode]
         target_addr = mode()
 
-        if self._page_crossed and instruction in (
-            self.ADC, self.AND, self.CMP, self.EOR, self.LDA, self.LDX, self.LDY, self.ORA, self.SBC
-        ):
-            self.extra_cycles += 1
+        # 1. Flush de base cycles minus de laatste cycle vóór de instructie:
+        base_flush = max(0, (cycles - 1) * 3)
+        self.pending_tia_clocks = cycles * 3
+        self._flush_tia(base_flush)
 
-        total_cycles = cycles + self.extra_cycles
-        self.pending_tia_clocks = total_cycles * 3
-        self._flush_tia()  # of vóór de write-cyclus van de instructie
+        # 2. Voer de instructie uit (hier kan self.extra_cycles oplopen, bijv. bij _branch):
         instruction(target_addr)
+
+        # 3. Tel eventuele extra_cycles erbij op en flush de resterende clocks:
+        total_cycles = cycles + self.extra_cycles
+        self.pending_tia_clocks += self.extra_cycles * 3
+        self._flush_tia()
         self.riot.step(total_cycles)
         return total_cycles
