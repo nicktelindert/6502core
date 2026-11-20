@@ -7,7 +7,12 @@ class CPU6507:
         self.riot = RIOT()
 
         self.memory = bytearray(0x2000)
-        self.memory[0x1000:0x2000] = rom_data
+        self.rom_banks = [rom_data[i:i + 0x1000] for i in range(0, len(rom_data), 0x1000)]
+        self.current_bank = 0
+        if len(self.rom_banks) == 2:
+            vec0 = self.rom_banks[0][0xFFC] | (self.rom_banks[0][0xFFD] << 8)
+            self.current_bank = 0 if (vec0 & 0x1000) else 1
+
         print("ROM grootte:", len(rom_data), "bytes")
         print("Reset vector:", hex(self.read(0xFFFC) | (self.read(0xFFFD) << 8)))
 
@@ -233,7 +238,7 @@ class CPU6507:
             0x9A: (self.TXS, self.mode_IMP, 2),
             0x98: (self.TYA, self.mode_IMP, 2),
 
-            # --- Undocumented (al in gebruik door jouw ROMs) ---
+            # --- Undocumented ---
             0x9E: (self.SHX, self.mode_ABY, 5),
             0x1B: (self.SLO, self.mode_ABY, 7),
             0x3B: (self.RLA, self.mode_ABY, 7),
@@ -242,7 +247,12 @@ class CPU6507:
     def read(self, address):
         address &= 0x1FFF
         if address & 0x1000:
-            return self.memory[0x1000 | (address & 0x0FFF)]
+            if len(self.rom_banks) == 2:
+                if address == 0x1FF8:
+                    self.current_bank = 0
+                elif address == 0x1FF9:
+                    self.current_bank = 1
+            return self.rom_banks[self.current_bank][address & 0x0FFF]
         if (address & 0x0080) != 0 and (address & 0x0200) == 0:
             return self.memory[0x0080 | (address & 0x7F)]
         if (address & 0x0080) != 0 and (address & 0x0200) != 0:
@@ -251,15 +261,22 @@ class CPU6507:
 
     def write(self, address, value):
         addr = address & 0x1FFF
-        if (addr & 0x1000) == 0 and (addr & 0x0080) == 0:
+        if addr & 0x1000:
+            if len(self.rom_banks) == 2:
+                if addr == 0x1FF8:
+                    self.current_bank = 0
+                elif addr == 0x1FF9:
+                    self.current_bank = 1
+            return
+        if (addr & 0x0080) == 0:
             if self.pending_tia_clocks > 0:
                 clocks_before_write = self.pending_tia_clocks
                 self.tia.step(clocks_before_write)
                 self.pending_tia_clocks = 0
             self.tia.write(addr & 0x3F, value)
-        elif (addr & 0x1000) == 0 and (addr & 0x0080) != 0 and (addr & 0x0200) == 0:
+        elif (addr & 0x0200) == 0:
             self.memory[0x0080 | (addr & 0x7F)] = value & 0xFF
-        elif (addr & 0x1000) == 0 and (addr & 0x0080) != 0 and (addr & 0x0200) != 0:
+        else:
             self.riot.write(addr, value & 0xFF)
 
     def fetch_byte(self):
@@ -696,21 +713,15 @@ class CPU6507:
     def step_frame(self):
         self._prev_pc = self.PC
         self.tia.frame_ready = False
-        debug_printed = False
         while not self.tia.frame_ready:
             if self.tia.wsync:
                 self.riot.step(1)
                 self.tia.step(3)
             else:
-                if not debug_printed and self.tia.scanline == 100:
-                    print(f"PC={hex(self.PC)} OP={hex(self.read(self.PC))} A={hex(self.A)} INTIM={hex(self.riot.timer)}")
-                    debug_printed = True
                 self.step()
 
     def step(self):
         self._hist.append((self.PC, self.read(self.PC), self.A, self.X, self.Y, self.SP))
-        if len(self._hist) < 10:
-            print(f"START stap: PC={self.PC:#x} OP={self.read(self.PC):#x}")
         if len(self._hist) > 25:
             self._hist.pop(0)
 
