@@ -87,6 +87,7 @@ class CPU6507:
             0x65: (self.ADC, self.mode_ZP,  3),
             0x75: (self.ADC, self.mode_ZPX, 4),
             0x6D: (self.ADC, self.mode_ABS, 4),
+            0x79: (self.ADC, self.mode_ABY, 4),
             0xA8: (self.TAY, self.mode_IMP, 2),
             0xAA: (self.TAX, self.mode_IMP, 2),
             0x98: (self.TYA, self.mode_IMP, 2),
@@ -148,6 +149,9 @@ class CPU6507:
             0x1B: (self.SLO, self.mode_ABY, 7),
             0xF8: (self.SED, self.mode_IMP, 2),
             0x3B: (self.RLA, self.mode_ABY, 7),
+            0xAE: (self.LDX, self.mode_ABS, 4),
+            0xB6: (self.LDX, self.mode_ZPY, 4),
+            0x6C: (self.JMP, self.mode_IND, 5),
         }
     
     def read(self, address):
@@ -164,7 +168,12 @@ class CPU6507:
     def write(self, address, value):
         addr = address & 0x1FFF
         if (addr & 0x1000) == 0 and (addr & 0x0080) == 0:
-            self.tia.write(addr & 0x3F, value)
+            if self.pending_tia_clocks > 0:
+                # Op de 6507 vindt de write plaats in de laatste cycle van de instructie
+                clocks_before_write = max(0, self.pending_tia_clocks)
+                self.tia.step(clocks_before_write)
+                self.pending_tia_clocks -= clocks_before_write
+                self.tia.write(addr & 0x3F, value)
         elif (addr & 0x1000) == 0 and (addr & 0x0080) != 0 and (addr & 0x0200) == 0:
             self.memory[0x0080 | (addr & 0x7F)] = value & 0xFF
         elif (addr & 0x1000) == 0 and (addr & 0x0080) != 0 and (addr & 0x0200) != 0:
@@ -233,6 +242,18 @@ class CPU6507:
 
         return (base_addr + self.Y) & 0xFFFF
 
+    def mode_IND(self):
+        low_ptr = self.read(self.PC)
+        high_ptr = self.read((self.PC + 1) & 0xFFFF)
+        self.PC = (self.PC + 2) & 0xFFFF
+        ptr = (high_ptr << 8) | low_ptr
+
+        low = self.read(ptr)
+        # 6502/6507 page-wrap bug: bij $xxFF blijft high-byte binnen dezelfde page
+        high_addr = (ptr & 0xFF00) | ((ptr + 1) & 0x00FF)
+        high = self.read(high_addr)
+        return (high << 8) | low
+   
     def JMP(self, addr):
         self.PC = addr
     
@@ -612,8 +633,6 @@ class CPU6507:
                     print(f"PC={hex(self.PC)} OP={hex(self.read(self.PC))} A={hex(self.A)} INTIM={hex(self.riot.timer)}")
                     debug_printed = True
                 cycles = self.step()
-                self.riot.step(cycles)
-                self.tia.step(cycles * 3)
   
     # --- De hoofd-stap ---
     def step(self):
@@ -631,8 +650,13 @@ class CPU6507:
             for h in self._hist:
                 print(f"PC={hex(h[0])} OP={hex(h[1])} A={hex(h[2])} X={hex(h[3])} Y={hex(h[4])} SP={hex(h[5])}")
             raise NotImplementedError(f"Onbekende opcode: {hex(opcode)} op {hex(self.PC - 1)}")
-
+        
         instruction, mode, cycles = self.opcodes[opcode]
         target_addr = mode()
+        total_cycles = cycles + self.extra_cycles
+        self.pending_tia_clocks = total_cycles * 3
         instruction(target_addr)
-        return cycles + self.extra_cycles
+        if self.pending_tia_clocks > 0:
+            self.tia.step(self.pending_tia_clocks)
+        self.riot.step(total_cycles)
+        return total_cycles

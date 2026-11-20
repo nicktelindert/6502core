@@ -38,8 +38,13 @@ class TIA:
         self.nusiz1 = 0x00  # $05: Number-Size Player 1 
         self.hmp0 = 0x00  # $20: Horizontal Motion Player 0
         self.hmp1 = 0x00  # $21: Horizontal Motion Player 1 
-        
-        # Beam positie
+        self.vdelp0 = 0x00
+        self.vdelp1 = 0x00
+        self.grp0_old = 0x00
+        self.grp1_old = 0x00
+        self.rendered_clock = 0 
+       
+       # Beam positie
         self.clock = 0      # 0..227 color clocks per lijn
         self.scanline = 0   # 0..261 scanlines per frame
         self.frame_ready = False
@@ -56,6 +61,7 @@ class TIA:
         return -signed
     
     def write(self, addr, val):
+        self._render_up_to_clock(self.clock)
         reg = addr & 0x3F
         v = val & 0xFF
         if reg == 0x00:    # VSYNC
@@ -84,13 +90,15 @@ class TIA:
         elif reg == 0x07:  # COLUP1
             self.colup1 = v
         elif reg == 0x10:  # RESP0
-            self.p0_x = max(0, (self.clock - 68) + 3) if self.clock >= 68 else 0
+            self.p0_x = max(0, (self.clock - 68) + 5) if self.clock >= 68 else 0
         elif reg == 0x11:  # RESP1
-            self.p1_x = max(0, (self.clock - 68) + 3) if self.clock >= 68 else 0
+            self.p1_x = max(0, (self.clock - 68) + 5) if self.clock >= 68 else 0
         elif reg == 0x1B:  # GRP0
             self.grp0 = v
+            self.grp1_old = self.grp1
         elif reg == 0x1C:  # GRP1
             self.grp1 = v
+            self.grp0_old = self.grp0
         elif reg == 0x04:  # NUSIZ0
             self.nusiz0 = v
         elif reg == 0x05:  # NUSIZ1
@@ -104,7 +112,11 @@ class TIA:
             self.p1_x = max(0, min(159, self.p1_x + self._hm_offset(self.hmp1)))
         elif reg == 0x2B:  # HMCLR: wis horizontale motion-registers
             self.hmp0 = 0x00
-            self.hmp1 = 0x00    
+            self.hmp1 = 0x00   
+        elif reg == 0x25:
+            self.vdelp0 = v & 0x01
+        elif reg == 0x26:
+            self.vdelp1 = v & 0x01
 
     def _playfield_bit(self, pf_x):
         """Geeft 0 of 1 voor playfield-positie pf_x (0..19 binnen een helft van 80 px)."""
@@ -164,8 +176,10 @@ class TIA:
         return None
    
     def _pixel_color(self, x):
-        p0 = self._player_color(x, self.p0_x, self.grp0, self.colup0, self.nusiz0)
-        p1 = self._player_color(x, self.p1_x, self.grp1, self.colup1, self.nusiz1)
+        active_grp0 = self.grp0_old if self.vdelp0 else self.grp0
+        active_grp1 = self.grp1_old if self.vdelp1 else self.grp1
+        p0 = self._player_color(x, self.p0_x, active_grp0, self.colup0, self.nusiz0)
+        p1 = self._player_color(x, self.p1_x, active_grp1, self.colup1, self.nusiz1)
         pf = self.colupf if self._is_pf_on(x) else None
         bk = self.colubk
 
@@ -173,25 +187,31 @@ class TIA:
         if self.ctrlpf & 0x04:
             return pf or p0 or p1 or bk
         return p0 or p1 or pf or bk
+    
+    def _render_up_to_clock(self, target_clock):
+        if not (self.vblank & 0x02):
+            y = self.scanline - 40
+            if 0 <= y < self.height:
+                start = max(self.rendered_clock, 68)
+                end = min(target_clock, 228)
+                for clk in range(start, end):
+                    x = clk - 68
+                    if 0 <= x < self.width:
+                        color = self._pixel_color(x)
+                        self.framebuffer[y][x] = self.ntsc_to_rgb(color)
+        self.rendered_clock = target_clock
 
     def step(self, color_clocks):
         """Laat de TIA 'color_clocks' vooruitlopen (3x CPU cycles)."""
-        for _ in range(color_clocks):
-            if not (self.vblank & 0x02):
-                x = self.clock - 68
-                y = self.scanline - 40
-                if 0 <= x < self.width and 0 <= y < self.height:
-                    color = self._pixel_color(x)
-                    self.framebuffer[y][x] = self.ntsc_to_rgb(color)
-
-            self.clock += 1
-            if self.clock >= 228:
-                self.clock = 0
-                self.scanline += 1
-                self.wsync = False
-                if self.scanline >= 262:
-                    self.scanline = 0
-                    self.frame_ready = True
+        self.clock += color_clocks
+        while self.clock >= 228:
+            self._render_up_to_clock(228)
+            self.clock -= 228
+            self.rendered_clock = 0
+            self.scanline += 1
+            self.wsync = False
+            if self.scanline >= 262:
+                self.scanline = 0
     
     def ntsc_to_rgb(self, color_byte):
         hue = (color_byte >> 4) & 0x0F
