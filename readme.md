@@ -34,8 +34,8 @@ Een cycle-accurate Atari 2600 (VCS) emulator geschreven in Python met Pygame, ge
 
 | Toets | Actie |
 | :--- | :--- |
-| **W / A / S / D**
-| **Ctrl / Shift ** | Fire/Actie
+| **W / A / S / D** | Bewegen
+| **Ctrl / Shift** | Fire/Actie
 | **F1** | Debug overlay tonen/verbergen |
 | **ESC** | Afsluiten |
 
