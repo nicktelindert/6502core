@@ -7,7 +7,6 @@ class Display:
         self.height = 192 * 3  # 640x576 (4:3 verhouding)
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption("Atari 2600 Emulator")
-        self.surface = pygame.Surface((160, 192))
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("monospace", 16, bold=True)
         self.show_help = False
@@ -22,17 +21,14 @@ class Display:
                 elif event.key == pygame.K_F1:
                     self.show_help = not self.show_help
 
-        for y in range(192):
-            for x in range(160):
-                self.surface.set_at((x, y), framebuffer[y][x])
-
-        pygame.transform.scale(self.surface, (self.width, self.height), self.screen)
-
+        frame_surface = pygame.image.frombuffer(framebuffer, (160, 192), "RGB")
+        scaled_surface = pygame.transform.scale(frame_surface, (self.width, self.height))
+        self.screen.blit(scaled_surface, (0, 0))
         if self.show_help:
             self._draw_help()
 
         pygame.display.flip()
-        self.clock.tick(60)  # Begrens netjes op 60 fps (NTSC)
+        self.clock.tick(60)
         return True
 
     def _draw_help(self):

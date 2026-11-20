@@ -1,6 +1,34 @@
 import sys
 from cpu6507 import CPU6507
 from display import Display
+import pygame
+def handle_input(cpu):
+    keys = pygame.key.get_pressed()
+
+    # Joystick Player 0 (SWCHA bits 4..7, 0 = ingedrukt)
+    swcha = 0xFF
+    if keys[pygame.K_w]:
+        swcha &= ~0x10  # Omhoog
+    if keys[pygame.K_s]:
+        swcha &= ~0x20  # Omlaag
+    if keys[pygame.K_a]:
+        swcha &= ~0x40  # Links
+    if keys[pygame.K_d]:
+        swcha &= ~0x80  # Rechts
+    cpu.riot.swcha = swcha
+
+    # Vuurknop Player 0 (TIA INPT4 bit 7, 0 = ingedrukt)
+    if keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]:
+        cpu.tia.inpt4 = 0x00
+    else:
+        cpu.tia.inpt4 = 0x80
+
+    # Tweede knop: Shift als Game Reset (SWCHB bit 0, 0 = ingedrukt)
+    # (Veel Atari 2600 games gebruiken een 1-knops joystick + Reset op de console)
+    swchb = 0x0B
+    if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
+        swchb &= ~0x01  # Reset
+    cpu.riot.swchb = swchb
 
 def main():
     rom_path = sys.argv[1]
@@ -13,10 +41,12 @@ def main():
 
     running = True
     while running:
+        handle_input(cpu)
         cpu.step_frame()
         running = display.render(cpu.tia.framebuffer)
 
     display.close()
+
 
 if __name__ == "__main__":
     main()

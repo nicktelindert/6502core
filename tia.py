@@ -89,35 +89,37 @@ class TIA:
         self.scanline = 0   # 0..261 scanlines per frame
         self.frame_ready = False
 
-        # Framebuffer (160 breed x 192 hoog, RGB tuples)
+        # Snelle flat RGB framebuffer (160 * 192 * 3 bytes) + NTSC lookup table
         self.width = 160
         self.height = 192
-        self.framebuffer = [[(0, 0, 0)] * self.width for _ in range(self.height)]
+        self.framebuffer = bytearray(self.width * self.height * 3)
+        self.ntsc_lut = [self.ntsc_to_rgb(c) for c in range(256)]
 
     def _hm_offset(self, reg_val):
         raw = (reg_val >> 4) & 0x0F
         signed = raw - 16 if raw >= 8 else raw
-        # Op de TIA: positief = naar links, negatief = naar rechts
         return -signed
 
     def read(self, addr):
         reg = addr & 0x0F
-        if reg == 0x00:
-            return self.cxm0p
-        elif reg == 0x01:
-            return self.cxm1p
-        elif reg == 0x02:
-            return self.cxp0fb
-        elif reg == 0x03:
-            return self.cxp1fb
-        elif reg == 0x04:
-            return self.cxm0fb
-        elif reg == 0x05:
-            return self.cxm1fb
-        elif reg == 0x06:
-            return self.cxblpf
-        elif reg == 0x07:
-            return self.cxppmm
+        if reg <= 0x07:
+            self._render_up_to_clock(self.clock)
+            if reg == 0x00:
+                return self.cxm0p
+            elif reg == 0x01:
+                return self.cxm1p
+            elif reg == 0x02:
+                return self.cxp0fb
+            elif reg == 0x03:
+                return self.cxp1fb
+            elif reg == 0x04:
+                return self.cxm0fb
+            elif reg == 0x05:
+                return self.cxm1fb
+            elif reg == 0x06:
+                return self.cxblpf
+            elif reg == 0x07:
+                return self.cxppmm
         elif reg == 0x0C:
             return self.inpt4
         elif reg == 0x0D:
@@ -127,10 +129,10 @@ class TIA:
     def write(self, addr, val):
         self._render_up_to_clock(self.clock)
         reg = addr & 0x3F
-        v = val & 0xFF
+        v = (val or 0) & 0xFF
 
-        if reg == 0x00:    # VSYNC
-            if (v & 0x02) and not (self.vsync & 0x02):
+        if reg == 0x00:    # VSYNC (einde van VSYNC start het nieuwe frame)
+            if not (v & 0x02) and (self.vsync & 0x02):
                 self.scanline = 0
                 self.frame_ready = True
             self.vsync = v
@@ -163,19 +165,19 @@ class TIA:
         elif reg == 0x0F:  # PF2
             self.pf2 = v
         elif reg == 0x10:  # RESP0
-            self.p0_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 0
+            self.p0_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
             if self.resmp0:
                 self.m0_x = (self.p0_x + 4) % 160
         elif reg == 0x11:  # RESP1
-            self.p1_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 0
+            self.p1_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
             if self.resmp1:
                 self.m1_x = (self.p1_x + 4) % 160
         elif reg == 0x12:  # RESM0
-            self.m0_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 0
+            self.m0_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
         elif reg == 0x13:  # RESM1
-            self.m1_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 0
+            self.m1_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
         elif reg == 0x14:  # RESBL
-            self.bl_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 0
+            self.bl_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
         elif reg == 0x1B:  # GRP0
             self.grp0 = v
             self.grp1_old = self.grp1
@@ -241,164 +243,210 @@ class TIA:
             self.cxblpf = 0x00
             self.cxppmm = 0x00
 
-    def _playfield_bit(self, pf_x):
-        """Geeft 0 of 1 voor playfield-positie pf_x (0..19 binnen een helft van 80 px)."""
-        if pf_x < 4:
-            bit = 4 + pf_x
-            return (self.pf0 >> bit) & 0x01
-        elif pf_x < 12:
-            bit = 7 - (pf_x - 4)
-            return (self.pf1 >> bit) & 0x01
-        else:
-            bit = pf_x - 12
-            return (self.pf2 >> bit) & 0x01
-
-    def _is_pf_on(self, x):
-        """Bepaalt of de playfield aan staat op scherm-x (0..159)."""
-        if x < 80:
-            pf_x = x // 4
-        else:
-            right_x = x - 80
-            if self.ctrlpf & 0x01:  # REF: spiegel de linkerhelft
-                pf_x = 19 - (right_x // 4)
-            else:
-                pf_x = right_x // 4
-        return bool(self._playfield_bit(pf_x))
-
     def _nusiz_layout(self, nusiz):
         mode = nusiz & 0x07
         if mode == 1:
-            return 1, [0, 16]
+            return 1, (0, 16)
         elif mode == 2:
-            return 1, [0, 32]
+            return 1, (0, 32)
         elif mode == 3:
-            return 1, [0, 16, 32]
+            return 1, (0, 16, 32)
         elif mode == 4:
-            return 1, [0, 64]
+            return 1, (0, 64)
         elif mode == 5:
-            return 2, [0]
+            return 2, (0,)
         elif mode == 6:
-            return 1, [0, 32, 64]
+            return 1, (0, 32, 64)
         elif mode == 7:
-            return 4, [0]
-        return 1, [0]
-
-    def _is_player_on(self, x, player_x, grp, nusiz, refp):
-        if grp == 0:
-            return False
-        scale, offsets = self._nusiz_layout(nusiz)
-        sprite_width = 8 * scale
-        reflect = bool(refp & 0x08)
-
-        for off in offsets:
-            start = (player_x + off) % 160
-            dx = (x - start) % 160
-            if dx < sprite_width:
-                pixel_idx = dx // scale
-                bit = pixel_idx if reflect else (7 - pixel_idx)
-                if (grp >> bit) & 0x01:
-                    return True
-        return False
-
-    def _is_missile_on(self, x, missile_x, enam, resmp, nusiz):
-        if not (enam & 0x02) or resmp:
-            return False
-        missile_width = 1 << ((nusiz >> 4) & 0x03)  # 1, 2, 4 of 8 pixels
-        _, offsets = self._nusiz_layout(nusiz)
-        for off in offsets:
-            start = (missile_x + off) % 160
-            if ((x - start) % 160) < missile_width:
-                return True
-        return False
-
-    def _is_ball_on(self, x):
-        active_enabl = self.enabl_old if self.vdelbl else self.enabl
-        if not (active_enabl & 0x02):
-            return False
-        ball_width = 1 << ((self.ctrlpf >> 4) & 0x03)  # 1, 2, 4 of 8 pixels
-        return ((x - self.bl_x) % 160) < ball_width
-
-    def _pixel_color(self, x):
-        active_grp0 = self.grp0_old if self.vdelp0 else self.grp0
-        active_grp1 = self.grp1_old if self.vdelp1 else self.grp1
-
-        p0_on = self._is_player_on(x, self.p0_x, active_grp0, self.nusiz0, self.refp0)
-        p1_on = self._is_player_on(x, self.p1_x, active_grp1, self.nusiz1, self.refp1)
-        m0_on = self._is_missile_on(x, self.m0_x, self.enam0, self.resmp0, self.nusiz0)
-        m1_on = self._is_missile_on(x, self.m1_x, self.enam1, self.resmp1, self.nusiz1)
-        bl_on = self._is_ball_on(x)
-        pf_on = self._is_pf_on(x)
-
-        # Hardware botsingsdetectie bijwerken
-        if m0_on and p1_on:
-            self.cxm0p |= 0x80
-        if m0_on and p0_on:
-            self.cxm0p |= 0x40
-        if m1_on and p0_on:
-            self.cxm1p |= 0x80
-        if m1_on and p1_on:
-            self.cxm1p |= 0x40
-        if p0_on and pf_on:
-            self.cxp0fb |= 0x80
-        if p0_on and bl_on:
-            self.cxp0fb |= 0x40
-        if p1_on and pf_on:
-            self.cxp1fb |= 0x80
-        if p1_on and bl_on:
-            self.cxp1fb |= 0x40
-        if m0_on and pf_on:
-            self.cxm0fb |= 0x80
-        if m0_on and bl_on:
-            self.cxm0fb |= 0x40
-        if m1_on and pf_on:
-            self.cxm1fb |= 0x80
-        if m1_on and bl_on:
-            self.cxm1fb |= 0x40
-        if bl_on and pf_on:
-            self.cxblpf |= 0x80
-        if p0_on and p1_on:
-            self.cxppmm |= 0x80
-        if m0_on and m1_on:
-            self.cxppmm |= 0x40
-
-        # Kleurprioriteit
-        pf_color = self.colupf
-        if (self.ctrlpf & 0x02) and not (self.ctrlpf & 0x04):  # SCORE mode (kleur PF als P0/P1)
-            pf_color = self.colup0 if x < 80 else self.colup1
-
-        if self.ctrlpf & 0x04:  # PF + Ball vóór Players + Missiles
-            if pf_on or bl_on:
-                return pf_color
-            if p0_on or m0_on:
-                return self.colup0
-            if p1_on or m1_on:
-                return self.colup1
-        else:                   # Players + Missiles vóór PF + Ball
-            if p0_on or m0_on:
-                return self.colup0
-            if p1_on or m1_on:
-                return self.colup1
-            if pf_on or bl_on:
-                return pf_color
-
-        return self.colubk
+            return 4, (0,)
+        return 1, (0,)
 
     def _render_up_to_clock(self, target_clock):
-        y = self.scanline - 40
-        if 0 <= y < self.height:
-            start = max(self.rendered_clock, 68)
-            end = min(target_clock, 228)
-            if self.vblank & 0x02:
-                for clk in range(start, end):
-                    x = clk - 68
-                    if 0 <= x < self.width:
-                        self.framebuffer[y][x] = (0, 0, 0)
+        y = self.scanline - 37
+        if not (0 <= y < self.height):
+            self.rendered_clock = target_clock
+            return
+
+        start = self.rendered_clock if self.rendered_clock > 68 else 68
+        end = target_clock if target_clock < 228 else 228
+        if start >= end:
+            self.rendered_clock = target_clock
+            return
+
+        fb = self.framebuffer
+        row_offset = y * 480  # 160 * 3
+
+        if self.vblank & 0x02:
+            for clk in range(start, end):
+                idx = row_offset + (clk - 68) * 3
+                fb[idx] = 0
+                fb[idx + 1] = 0
+                fb[idx + 2] = 0
+            self.rendered_clock = target_clock
+            return
+
+        lut = self.ntsc_lut
+        active_grp0 = self.grp0_old if self.vdelp0 else self.grp0
+        active_grp1 = self.grp1_old if self.vdelp1 else self.grp1
+        active_enabl = self.enabl_old if self.vdelbl else self.enabl
+
+        p0_x = self.p0_x
+        p1_x = self.p1_x
+        m0_x = self.m0_x
+        m1_x = self.m1_x
+        bl_x = self.bl_x
+
+        p0_scale, p0_offsets = self._nusiz_layout(self.nusiz0)
+        p1_scale, p1_offsets = self._nusiz_layout(self.nusiz1)
+        p0_w = 8 * p0_scale
+        p1_w = 8 * p1_scale
+        refp0 = bool(self.refp0 & 0x08)
+        refp1 = bool(self.refp1 & 0x08)
+
+        m0_en = bool(self.enam0 & 0x02) and not self.resmp0
+        m1_en = bool(self.enam1 & 0x02) and not self.resmp1
+        m0_w = 1 << ((self.nusiz0 >> 4) & 0x03)
+        m1_w = 1 << ((self.nusiz1 >> 4) & 0x03)
+
+        bl_en = bool(active_enabl & 0x02)
+        bl_w = 1 << ((self.ctrlpf >> 4) & 0x03)
+
+        pf0 = self.pf0
+        pf1 = self.pf1
+        pf2 = self.pf2
+        pf_ref = bool(self.ctrlpf & 0x01)
+        pf_score = bool(self.ctrlpf & 0x02) and not (self.ctrlpf & 0x04)
+        pf_prio = bool(self.ctrlpf & 0x04)
+
+        colup0 = self.colup0
+        colup1 = self.colup1
+        colupf = self.colupf
+        colubk = self.colubk
+
+        cxm0p = self.cxm0p
+        cxm1p = self.cxm1p
+        cxp0fb = self.cxp0fb
+        cxp1fb = self.cxp1fb
+        cxm0fb = self.cxm0fb
+        cxm1fb = self.cxm1fb
+        cxblpf = self.cxblpf
+        cxppmm = self.cxppmm
+
+        for clk in range(start, end):
+            x = clk - 68
+
+            # Player 0
+            p0_on = False
+            if active_grp0:
+                for off in p0_offsets:
+                    dx = (x - (p0_x + off)) % 160
+                    if dx < p0_w:
+                        px = dx // p0_scale
+                        bit = px if refp0 else (7 - px)
+                        if (active_grp0 >> bit) & 0x01:
+                            p0_on = True
+                            break
+
+            # Player 1
+            p1_on = False
+            if active_grp1:
+                for off in p1_offsets:
+                    dx = (x - (p1_x + off)) % 160
+                    if dx < p1_w:
+                        px = dx // p1_scale
+                        bit = px if refp1 else (7 - px)
+                        if (active_grp1 >> bit) & 0x01:
+                            p1_on = True
+                            break
+
+            # Missiles & Ball
+            m0_on = False
+            if m0_en:
+                for off in p0_offsets:
+                    if ((x - (m0_x + off)) % 160) < m0_w:
+                        m0_on = True
+                        break
+
+            m1_on = False
+            if m1_en:
+                for off in p1_offsets:
+                    if ((x - (m1_x + off)) % 160) < m1_w:
+                        m1_on = True
+                        break
+
+            bl_on = bl_en and (((x - bl_x) % 160) < bl_w)
+
+            # Playfield
+            if x < 80:
+                pf_x = x >> 2
             else:
-                for clk in range(start, end):
-                    x = clk - 68
-                    if 0 <= x < self.width:
-                        color = self._pixel_color(x)
-                        self.framebuffer[y][x] = self.ntsc_to_rgb(color)
+                rx = (x - 80) >> 2
+                pf_x = (19 - rx) if pf_ref else rx
+
+            if pf_x < 4:
+                pf_on = bool((pf0 >> (4 + pf_x)) & 0x01)
+            elif pf_x < 12:
+                pf_on = bool((pf1 >> (11 - pf_x)) & 0x01)
+            else:
+                pf_on = bool((pf2 >> (pf_x - 12)) & 0x01)
+
+            # Collisions
+            if m0_on:
+                if p1_on: cxm0p |= 0x80
+                if p0_on: cxm0p |= 0x40
+                if pf_on: cxm0fb |= 0x80
+                if bl_on: cxm0fb |= 0x40
+                if m1_on: cxppmm |= 0x40
+            if m1_on:
+                if p0_on: cxm1p |= 0x80
+                if p1_on: cxm1p |= 0x40
+                if pf_on: cxm1fb |= 0x80
+                if bl_on: cxm1fb |= 0x40
+            if p0_on:
+                if pf_on: cxp0fb |= 0x80
+                if bl_on: cxp0fb |= 0x40
+                if p1_on: cxppmm |= 0x80
+            if p1_on:
+                if pf_on: cxp1fb |= 0x80
+                if bl_on: cxp1fb |= 0x40
+            if bl_on and pf_on:
+                cxblpf |= 0x80
+
+            # Kleurprioriteit
+            pfc = (colup0 if x < 80 else colup1) if pf_score else colupf
+            if pf_prio:
+                if pf_on or bl_on:
+                    c = pfc
+                elif p0_on or m0_on:
+                    c = colup0
+                elif p1_on or m1_on:
+                    c = colup1
+                else:
+                    c = colubk
+            else:
+                if p0_on or m0_on:
+                    c = colup0
+                elif p1_on or m1_on:
+                    c = colup1
+                elif pf_on or bl_on:
+                    c = pfc
+                else:
+                    c = colubk
+
+            r, g, b = lut[c]
+            idx = row_offset + x * 3
+            fb[idx] = r
+            fb[idx + 1] = g
+            fb[idx + 2] = b
+
+        self.cxm0p = cxm0p
+        self.cxm1p = cxm1p
+        self.cxp0fb = cxp0fb
+        self.cxp1fb = cxp1fb
+        self.cxm0fb = cxm0fb
+        self.cxm1fb = cxm1fb
+        self.cxblpf = cxblpf
+        self.cxppmm = cxppmm
         self.rendered_clock = target_clock
 
     def step(self, color_clocks):
