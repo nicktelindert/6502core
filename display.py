@@ -9,7 +9,7 @@ class Display:
         pygame.display.set_caption("Atari 2600 Emulator")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("monospace", 16, bold=True)
-        self.show_help = False
+        self.show_help = True
 
     def render(self, framebuffer):
         for event in pygame.event.get():
@@ -37,6 +37,7 @@ class Display:
         overlay.fill((20, 20, 20))
         self.screen.blit(overlay, (15, 15))
         self.screen.blit(self.font.render("F1: Help | ESC: Afsluiten", True, (0, 255, 120)), (25, 25))
+        self.screen.blit(self.font.render("ASWD: Bewegen CTRL/SHIFT: action buttons", True, (0, 255, 120)), (25, 55))
 
     def close(self):
         pygame.quit()
