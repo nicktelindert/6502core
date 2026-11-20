@@ -3,22 +3,29 @@ from riot import RIOT
 
 class CPU6507:
     def __init__(self, rom_data):
+        # In __init__:
         self.tia = TIA()
         self.riot = RIOT()
 
         self.memory = bytearray(0x2000)
         self.memory[0x1000:0x2000] = rom_data
-        self.cycles = 0
+        print("ROM grootte:", len(rom_data), "bytes")
+        print("Reset vector:", hex(self.read(0xFFFC) | (self.read(0xFFFD) << 8)))
+        self.extra_cycles = 0
         self.A = 0x00
         self.X = 0x00
         self.Y = 0x00
         self.SP = 0xFD
+        
         self.flags = {'N': 0, 'V': 0, 'B': 0, 'D': 0, 'I': 1, 'Z': 0, 'C': 0}
 
         low = self.read(0xFFFC)
         high = self.read(0xFFFD)
         self.PC = (high << 8) | low
 
+        self._hist = []
+
+        
         # De Opcode Tabel: opcode -> (instructie, addressing_mode, cycles)
         self.opcodes = {
             0x78: (self.SEI, self.mode_IMP, 2),
@@ -137,27 +144,32 @@ class CPU6507:
             0x39: (self.AND, self.mode_ABY, 4),
             0x08: (self.PHP, self.mode_IMP, 3),
             0x28: (self.PLP, self.mode_IMP, 4),
+            0x9E: (self.SHX, self.mode_ABY, 5),
+            0x1B: (self.SLO, self.mode_ABY, 7),
+            0xF8: (self.SED, self.mode_IMP, 2),
+            0x3B: (self.RLA, self.mode_ABY, 7),
         }
-
+    
     def read(self, address):
-        address &= 0x1FFF
-        if (address & 0x1000) == 0 and (address & 0x0080) != 0 and (address & 0x0200) != 0:
-            return self.riot.read(address)
-        return self.memory[address & 0x1FFF]
+            address &= 0x1FFF
+            if address & 0x1000:
+                # Map naar 0xF000..0xFFFF in self.memory (pas aan naar 0x1000 als je ROM daar staat):
+                return self.memory[0x1000 | (address & 0x0FFF)]
+            if (address & 0x0080) != 0 and (address & 0x0200) == 0:
+                return self.memory[0x0080 | (address & 0x7F)]
+            if (address & 0x0080) != 0 and (address & 0x0200) != 0:
+                return self.riot.read(address)
+            return 0
 
     def write(self, address, value):
         addr = address & 0x1FFF
         if (addr & 0x1000) == 0 and (addr & 0x0080) == 0:
-            self.tia.write(addr, value)
-            return
-        
-        if (address & 0x1000) == 0 and (address & 0x0080) != 0 and (address & 0x0200) != 0:
-            self.riot.write(address, value)
-            return
-
-        if addr < 0x1000:
-            self.memory[addr] = value & 0xFF
-
+            self.tia.write(addr & 0x3F, value)
+        elif (addr & 0x1000) == 0 and (addr & 0x0080) != 0 and (addr & 0x0200) == 0:
+            self.memory[0x0080 | (addr & 0x7F)] = value & 0xFF
+        elif (addr & 0x1000) == 0 and (addr & 0x0080) != 0 and (addr & 0x0200) != 0:
+            self.riot.write(addr, value & 0xFF)
+    
     def fetch_byte(self):
         val = self.read(self.PC)
         self.PC = (self.PC + 1) & 0xFFFF
@@ -206,7 +218,6 @@ class CPU6507:
 
     def mode_REL(self):
         offset = self.fetch_byte()
-        # Zet unsigned byte (0..255) om naar signed (-128..127)
         if offset & 0x80:
             offset -= 0x100
         return (self.PC + offset) & 0xFFFF
@@ -244,6 +255,7 @@ class CPU6507:
         self.update_zn(self.Y)
 
     def STA(self, addr):
+        # In def STA(self, addr):       
         self.write(addr, self.A)
 
     def TXS(self, addr):
@@ -253,13 +265,37 @@ class CPU6507:
         self.X = (self.X - 1) & 0xFF
         self.update_zn(self.X)
 
-    def BNE(self, addr):
-        if self.flags['Z'] == 0:
+    def _branch(self, condition, addr):
+        self.extra_cycles = 0
+        if condition:
+            old_pc = self.PC
             self.PC = addr
+            self.extra_cycles += 1
+            if (old_pc & 0xFF00) != (self.PC & 0xFF00):
+                self.extra_cycles += 1
+    
+    def BNE(self, addr):
+        return self._branch(self.flags['Z'] == 0, addr)
 
+    def BEQ(self, addr):
+        return self._branch(self.flags['Z'] == 1, addr)
+
+    def BPL(self, addr):
+        return self._branch(self.flags['N'] == 0, addr)
+
+    def BMI(self, addr):
+        return self._branch(self.flags['N'] == 1, addr)
+
+    def BCC(self, addr):
+        return self._branch(self.flags['C'] == 0, addr)
+
+    def BCS(self, addr):
+        return self._branch(self.flags['C'] == 1, addr)
+    
     def INX(self, addr):
         self.X = (self.X+1) & 0XFF
         self.update_zn(self.X)
+
     def INY(self, addr):
         self.Y = (self.Y + 1) & 0xFF
         self.update_zn(self.Y)
@@ -325,14 +361,6 @@ class CPU6507:
     def STY(self, addr):
         self.write(addr, self.Y)
 
-    def BPL(self, addr):
-        if self.flags['N'] == 0:
-            self.PC = addr
-
-    def BMI(self, addr):
-        if self.flags['N'] ==1:
-            self.PC = addr
-    
     def ASL(self, addr):
         if addr is None:
             val = self.A
@@ -410,25 +438,6 @@ class CPU6507:
         self.flags['C'] = 1 if self.Y >= val else 0
         self.update_zn(result)     
 
-    def BCS(self, addr):
-        if self.flags['C'] == 1:
-            self.PC = addr;
-
-    def BCC(self, addr):
-        if self.flags['C'] == 0:
-            self.PC = addr;
-
-    def BEQ(self, addr):
-        if self.flags['Z'] == 1:
-            # +1 cycle omdat de sprong wordt genomen
-            self.cycles += 1
-            
-            # +1 extra cycle als de high byte (de 'page') verandert
-            if (self.PC & 0xFF00) != (addr & 0xFF00):
-                self.cycles += 1
-                
-            self.PC = addr
-    
     def EOR(self, addr):
         self.A = self.A ^ self.read(addr)
         self.update_zn(self.A)
@@ -472,7 +481,20 @@ class CPU6507:
     def ADC(self, addr):
         val = self.read(addr)
         carry_in = self.flags['C']
-
+        if self.flags['D']:
+            low = (self.A & 0x0F) + (val & 0x0F) + carry_in
+            if low > 9:
+                low += 6
+            high = (self.A >> 4) + (val >> 4) + (1 if low > 0x0F else 0)
+            self.flags['V'] = 1 if (~(self.A ^ val) & (self.A ^ (high << 4)) & 0x80) else 0
+            if high > 9:
+                high += 6
+            self.flags['C'] = 1 if high > 0x0F else 0
+            result = ((high & 0x0F) << 4) | (low & 0x0F)
+            self.A = result
+            self.update_zn(self.A)
+            return
+        
         # Tel A, de gelezen waarde en de huidige Carry bij elkaar op
         total = self.A + val + carry_in
         result = total & 0xFF
@@ -509,14 +531,32 @@ class CPU6507:
 
     def SBC(self, addr):
         # Op de 6502 is A - val - (1 - C) gelijk aan A + (~val) + C
-        val = self.read(addr) ^ 0xFF
+        raw_val = self.read(addr) ^ 0xFF
         carry_in = self.flags['C']
-    
-        total = self.A + val + carry_in
+       
+        if self.flags['D']:
+            low = (self.A & 0x0F) - (raw_val & 0x0F) - (1 - carry_in)
+            borrow_low = 0
+            if low < 0:
+                low -= 6
+                borrow_low = 1
+            high = (self.A >> 4) - (raw_val >> 4) - borrow_low
+            if high < 0:
+                high -= 6
+            # Vlaggen C en V gedragen zich op de 6502 zoals bij binaire aftrekking:
+            bin_total = self.A + raw_val + carry_in
+            self.flags['C'] = 1 if bin_total > 0xFF else 0
+            self.flags['V'] = 1 if (~(self.A ^ raw_val) & (self.A ^ (bin_total & 0xFF)) & 0x80) else 0
+            self.A = ((high & 0x0F) << 4) | (low & 0x0F)
+            self.update_zn(self.A)
+            return 
+        
+        total = self.A + raw_val + carry_in
         result = total & 0xFF
     
         self.flags['C'] = 1 if total > 0xFF else 0
-        self.flags['V'] = 1 if (~(self.A ^ val) & (self.A ^ result) & 0x80) else 0
+        self.flags['V'] = 1 if (~(self.A ^ raw_val) & (self.A ^ result) & 0x80) else 0
+
     
         self.A = result
         self.update_zn(self.A)
@@ -533,23 +573,66 @@ class CPU6507:
         # Just burning up some cycles:)
         pass
 
+    def SHX(self, addr):
+        high = ((addr - self.Y) >> 8) & 0xFF
+        self.write(addr, self.X & (high + 1))
+  
+    def SLO(self, addr):
+        # Undocumented opcode: ASL memory + ORA met A
+        val = self.read(addr)
+        self.flags['C'] = 1 if (val & 0x80) else 0
+        val = (val << 1) & 0xFF
+        self.write(addr, val)
+        self.A |= val
+        self.update_zn(self.A)
+    
+    def SED(self, addr=None):
+        self.flags['D'] = 1
+
+    def RLA(self, addr):
+        # Undocumented opcode: ROL memory + AND met A
+        val = self.read(addr)
+        old_c = self.flags['C']
+        self.flags['C'] = 1 if (val & 0x80) else 0
+        val = ((val << 1) | old_c) & 0xFF
+        self.write(addr, val)
+        self.A &= val
+        self.update_zn(self.A)
+
     def step_frame(self):
+        self._prev_pc = self.PC 
         self.tia.frame_ready = False
+        debug_printed = False
         while not self.tia.frame_ready:
             if self.tia.wsync:
-                # CPU staat stil tot het einde van de huidige scanline
+                self.riot.step(1)
                 self.tia.step(3)
             else:
-                cycles = self.step()  # Jouw bestaande methode die 1 instructie uitvoert
-                self.tia.step(cycles * 3) 
-    
+                if not debug_printed and self.tia.scanline == 100:
+                    print(f"PC={hex(self.PC)} OP={hex(self.read(self.PC))} A={hex(self.A)} INTIM={hex(self.riot.timer)}")
+                    debug_printed = True
+                cycles = self.step()
+                self.riot.step(cycles)
+                self.tia.step(cycles * 3)
+  
     # --- De hoofd-stap ---
     def step(self):
+        # Bovenaan step(), vóór fetch_byte():
+        self._hist.append((self.PC, self.read(self.PC), self.A, self.X, self.Y, self.SP))
+        if len(self._hist) < 10:
+            print(f"START stap: PC={self.PC:#x} OP={self.read(self.PC):#x}")
+        if len(self._hist) > 25:
+            self._hist.pop(0)
+        
+        prev_pc = self.PC
         opcode = self.fetch_byte()
+
         if opcode not in self.opcodes:
+            for h in self._hist:
+                print(f"PC={hex(h[0])} OP={hex(h[1])} A={hex(h[2])} X={hex(h[3])} Y={hex(h[4])} SP={hex(h[5])}")
             raise NotImplementedError(f"Onbekende opcode: {hex(opcode)} op {hex(self.PC - 1)}")
 
         instruction, mode, cycles = self.opcodes[opcode]
         target_addr = mode()
         instruction(target_addr)
-        return cycles
+        return cycles + self.extra_cycles
