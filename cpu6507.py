@@ -247,7 +247,7 @@ class CPU6507:
             return self.memory[0x0080 | (address & 0x7F)]
         if (address & 0x0080) != 0 and (address & 0x0200) != 0:
             return self.riot.read(address)
-        return 0
+        return self.tia.read(address)
 
     def write(self, address, value):
         addr = address & 0x1FFF
