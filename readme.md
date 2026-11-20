@@ -48,4 +48,5 @@ Een cycle-accurate Atari 2600 (VCS) emulator geschreven in Python met Pygame, ge
 - [ ] Mid-scanline `PF1`/`PF2` latching verfijnen voor *Donkey Kong*
 - [ ] Audio-output balanceren en resampling vloeiender maken
 - [ ] Ondersteuning voor extra bankswitching-schemes (bijv. F8 / F6)
+- [ ] 2K/8K/16K ROMS ondersteuning *8K werkt maar bank switching werkt nog niet correct(methode verschilt tussen developers*)
 - [ ] Code opschonen/refactoring(veel spaghetti code!)
