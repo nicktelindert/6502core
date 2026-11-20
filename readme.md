@@ -1,48 +1,51 @@
-# Atari 2600 Emulator (MOS 6507)
+# Atari 2600 Emulator (Python)
 
-Een minimalistische, headless Atari 2600-emulator gebouwd in Python als leerproject om de architectuur van de **MOS 6507 CPU** en retro-hardware op instructie- en geheugenniveau te doorgronden.
+Een cycle-accurate Atari 2600 (VCS) emulator geschreven in Python met Pygame, gebouwd vanaf scratch om de architectuur van de MOS 6507, TIA en RIOT (6532) te doorgronden.
 
-## Architectuur & Ontwerpdoelen
-* **Headless-first:** Geen complexe GUI tijdens de CPU-ontwikkelfase; volledige focus op zuivere instructielogica, registers, status-flags en geheugenadressering.
-* **MOS 6507 CPU:** Implementatie van de 6502-variant met een 13-bit adresbus (`8 KB` adresruimte via `& 0x1FFF`).
-* **ROM-ondersteuning:** Direct laden van `.A26` ROM-bestanden.
-* **Cycle-voorbereiding:** Opcode-tabellen bevatten nu al basis-cyclewaarden ter voorbereiding op de latere integratie met de **TIA** (*Television Interface Adaptor*) en *racing the beam*-timing.
+## Features
 
-## Voortgang
-* **Huidige mijlpaal:** Meer dan **1.305 uitgevoerde instructies** in *Pitfall!* (`pitfall.A26`).
-* **Werkwijze:** Iteratieve opbouw waarbij ontbrekende opcodes stapsgewijs worden geanalyseerd en toegevoegd zodra de ROM ze aanroept.
+- **MOS 6507 CPU (`cpu6507.py`)**: Volledige 6502-instructieset (13-bit adresbus) inclusief cycle-accurate uitvoering en page-crossing timing.
+- **TIA Graphics & Timing (`tia.py`)**: "Racing the beam" rendering op color-clock niveau (228 color clocks per scanline, 262 NTSC scanlines) met ondersteuning voor `WSYNC`, `HMOVE`, `RESPx`, Playfield (`PF0`–`PF2`), Players (`P0`/`P1`), Missiles (`M0`/`M1`) en Ball (`BL`).
+- **TIA Audio**: 2-kanaals geluidsweergave via 4-bit, 5-bit en 9-bit Linear Feedback Shift Registers (LFSR).
+- **RIOT 6532**: 128 bytes RAM, interval-timers en joystick/console-schakelaars.
+- **Debug Overlay**: Ingebouwde live inspector (`F1`) voor scanline, color clock en sprite-posities.
 
-## Geïmplementeerde Onderdelen (`cpu6507.py`)
+## Geteste Games
 
-### Registers & Flags
-* **Registers:** `A` (Accumulator), `X`, `Y`, `SP` (Stack Pointer), `PC` (Program Counter)
-* **Processor Status Flags:** `N` (Negative), `V` (Overflow), `B` (Break), `D` (Decimal), `I` (Interrupt Disable), `Z` (Zero), `C` (Carry)
+- *Pac-Man*
+- *Pitfall!*
+- *Jungle Hunt*
+- *Donkey Kong* (speelbaar; kleine mid-scanline playfield-offset in bewerking)
 
-### Addressing Modes
-* `mode_IMP` (Implied)
-* `mode_IMM` (Immediate)
-* `mode_ZP` (Zero Page)
-* `mode_ZPX` (Zero Page, X)
-* `mode_ABS` (Absolute)
-* `mode_ABX` (Absolute, X)
-* `mode_REL` (Relative — inclusief signed two's complement offset-berekening)
+## Installatie & Gebruik
 
-### Geïmplementeerde Opcodes
-| Categorie | Instructies | Opcodes (o.a.) |
-| :--- | :--- | :--- |
-| **Load / Store** | `LDA`, `LDX`, `LDY`, `STA`, `STX`, `STY` | `0xA9`, `0xA5`, `0xAD`, `0xBD`, `0xA2`, `0xA0`, `0x85`, `0x86`, `0x84` |
-| **Rekenkundig** | `ADC` | `0x69`, `0x65`, `0x75`, `0x6D` |
-| **Logisch & Shifts** | `AND`, `EOR`, `LSR` | `0x29`, `0x45`, `0x4A` |
-| **Vergelijkingen** | `CMP`, `CPX`, `CPY` | `0xC9`, `0xE0`, `0xE4`, `0xEC`, `0xC0`, `0xC4`, `0xCC` |
-| **Branches** | `BNE`, `BEQ`, `BPL`, `BMI`, `BCS`, `BCC` | `0xD0`, `0xF0`, `0x10`, `0x30`, `0xB0`, `0x90` |
-| **Stack** | `PHA`, `PLA` | `0x48`, `0x68` |
-| **Flags & Status** | `CLC`, `SEC`, `SEI`, `CLD` | `0x18`, `0x38`, `0x78`, `0xD8` |
-| **Control & Overig** | `JMP`, `JSR`, `RTS`, `INX`, `DEX`, `INY`, `DEY`, `TXS`, `NOP` | `0x4C`, `0x20`, `0x60`, `0xE8`, `0xCA`, `0xC8`, `0x88`, `0x9A`, `0xEA` |
+1. **Vereisten installeren**:
+   ```bash
+   pip install pygame
+   ```
+   *(Op Linux / Distrobox met PipeWire/PulseAudio eventueel `pulseaudio-libs` installeren en `SDL_AUDIODRIVER=pulseaudio` gebruiken.)*
+
+2. **Emulator starten**:
+   ```bash
+   python main.py pad/naar/rom.bin
+   ```
+
+## Besturing
+
+| Toets | Actie |
+| :--- | :--- |
+| **W / A / S / D** of **Pijltjes** | Joystick beweging |
+| **Ctrl / Shift / Spatie** | Fire-knop |
+| **F1** | Debug overlay tonen/verbergen |
+| **ESC** | Afsluiten |
+
+## BUGS
+- Het geluid is nog een beetje om te janken, maar heb er een basis in zitten
+- Er zitten nog grafische bugs in, met name Donkey Kong gaat niet zo soepel...
 
 ## Roadmap
-- [x] Basis CPU-structuur, geheugenbus (8 KB) en stack-operaties
-- [x] Kernset van load/store-, vergelijkings-, logische en branch-opcodes
-- [x] Eerste rekenkundige optelling (`ADC`) en carry-afhandeling
-- [ ] Volledige 6507-instructieset afmaken via *Pitfall!*
-- [ ] Cycle-teller activeren en koppelen aan scanline-timing
-- [ ] TIA-registers en basis beeldopbouw implementeren
+
+- [ ] Mid-scanline `PF1`/`PF2` latching verfijnen voor *Donkey Kong*
+- [ ] Audio-output balanceren en resampling vloeiender maken
+- [ ] Ondersteuning voor extra bankswitching-schemes (bijv. F8 / F6)
+- [ ] Code opschonen/refactoring(veel spaghetti code!)

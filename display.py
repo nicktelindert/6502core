@@ -2,6 +2,7 @@ import pygame
 
 class Display:
     def __init__(self, scale=4):
+        pygame.mixer.pre_init(44100, -16, 1, 1024)
         pygame.init()
         self.debug_lines = []
         self.width = 160 * scale
