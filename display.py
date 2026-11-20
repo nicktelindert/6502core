@@ -3,6 +3,7 @@ import pygame
 class Display:
     def __init__(self, scale=4):
         pygame.init()
+        self.debug_lines = []
         self.width = 160 * scale
         self.height = 192 * 3  # 640x576 (4:3 verhouding)
         self.screen = pygame.display.set_mode((self.width, self.height))
@@ -10,6 +11,10 @@ class Display:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("monospace", 16, bold=True)
         self.show_help = True
+
+    def set_debug_lines(self, debug):
+        self.debug_lines = debug
+
 
     def render(self, framebuffer):
         for event in pygame.event.get():
@@ -38,6 +43,10 @@ class Display:
         self.screen.blit(overlay, (15, 15))
         self.screen.blit(self.font.render("F1: Help | ESC: Afsluiten", True, (0, 255, 120)), (25, 25))
         self.screen.blit(self.font.render("ASWD: Bewegen CTRL/SHIFT: action buttons", True, (0, 255, 120)), (25, 55))
+        for i, line in enumerate(self.debug_lines):
+            surf = self.font.render(line, True, (0, 255, 120))
+            self.screen.blit(surf, (25, 75 + i * 20))
+
 
     def close(self):
         pygame.quit()

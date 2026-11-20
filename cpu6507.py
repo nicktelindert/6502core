@@ -1,6 +1,7 @@
 from tia import TIA
 from riot import RIOT
 
+
 class CPU6507:
     def __init__(self, rom_data):
         self.tia = TIA()
@@ -244,6 +245,16 @@ class CPU6507:
             0x3B: (self.RLA, self.mode_ABY, 7),
         }
 
+    def _flush_tia(self, clocks=None):
+        if clocks is None:
+            clocks = self.pending_tia_clocks
+            self.pending_tia_clocks = 0
+        else:
+            clocks = min(clocks, self.pending_tia_clocks)
+            self.pending_tia_clocks -= clocks
+        if clocks > 0:
+            self.tia.step(clocks)
+
     def read(self, address):
         address &= 0x1FFF
         if address & 0x1000:
@@ -252,15 +263,16 @@ class CPU6507:
                     self.current_bank = 0
                 elif address == 0x1FF9:
                     self.current_bank = 1
-            return self.rom_banks[self.current_bank][address & 0x0FFF]
+            return self.rom_banks[self.current_bank][address & 0x0FFF] & 0xFF
         if (address & 0x0080) != 0 and (address & 0x0200) == 0:
-            return self.memory[0x0080 | (address & 0x7F)]
+            return self.memory[0x0080 | (address & 0x7F)] & 0xFF
         if (address & 0x0080) != 0 and (address & 0x0200) != 0:
-            return self.riot.read(address)
-        return self.tia.read(address)
+            return self.riot.read(address) & 0xFF
+        return self.tia.read(address) & 0xFF
 
     def write(self, address, value):
         addr = address & 0x1FFF
+        v = (value or 0) & 0xFF
         if addr & 0x1000:
             if len(self.rom_banks) == 2:
                 if addr == 0x1FF8:
@@ -269,14 +281,12 @@ class CPU6507:
                     self.current_bank = 1
             return
         if (addr & 0x0080) == 0:
-            if self.pending_tia_clocks > 0:
-                self.tia.step(self.pending_tia_clocks)
-                self.pending_tia_clocks = 0
-            self.tia.write(addr & 0x3F, value)
+            self._flush_tia()
+            self.tia.write(addr & 0x3F, v)
         elif (addr & 0x0200) == 0:
-            self.memory[0x0080 | (addr & 0x7F)] = value & 0xFF
+            self.memory[0x0080 | (addr & 0x7F)] = v
         else:
-            self.riot.write(addr, value & 0xFF)
+            self.riot.write(addr, v)
 
     def fetch_byte(self):
         val = self.read(self.PC)
@@ -709,13 +719,39 @@ class CPU6507:
         self.A &= val
         self.update_zn(self.A)
 
+    def _tick_cycles(self, count=1):
+        if count <= 0:
+            return
+        for _ in range(count):
+            if self.pending_tia_clocks >= 3:
+                self.pending_tia_clocks -= 3
+                self.tia.step(3)
+            elif self.pending_tia_clocks > 0:
+                rem = self.pending_tia_clocks
+                self.pending_tia_clocks = 0
+                self.tia.step(rem)
+            self.riot.step(1)
+
+    def _flush_tia(self, clocks=None):
+        if clocks is None:
+            clocks = self.pending_tia_clocks
+            self.pending_tia_clocks = 0
+        else:
+            clocks = min(clocks, self.pending_tia_clocks)
+            self.pending_tia_clocks -= clocks
+        if clocks > 0:
+            self.tia.step(clocks)
+
     def step_frame(self):
         self._prev_pc = self.PC
         self.tia.frame_ready = False
         while not self.tia.frame_ready:
             if self.tia.wsync:
-                self.riot.step(1)
-                self.tia.step(3)
+                remaining = 228 - self.tia.clock
+                if remaining <= 0:
+                    remaining = 228
+                self.tia.step(remaining)
+                self.riot.step(max(1, remaining // 3))
             else:
                 self.step()
 
@@ -737,7 +773,6 @@ class CPU6507:
         instruction, mode, cycles = self.opcodes[opcode]
         target_addr = mode()
 
-        # Page-cross +1 cycle geldt voor read-instructies (niet voor STA/RMW)
         if self._page_crossed and instruction in (
             self.ADC, self.AND, self.CMP, self.EOR, self.LDA, self.LDX, self.LDY, self.ORA, self.SBC
         ):
@@ -745,8 +780,7 @@ class CPU6507:
 
         total_cycles = cycles + self.extra_cycles
         self.pending_tia_clocks = total_cycles * 3
+        self._flush_tia()  # of vóór de write-cyclus van de instructie
         instruction(target_addr)
-        if self.pending_tia_clocks > 0:
-            self.tia.step(self.pending_tia_clocks)
         self.riot.step(total_cycles)
         return total_cycles

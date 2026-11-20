@@ -19,6 +19,13 @@ class TIA:
     ]
 
     def __init__(self):
+        # Bovenaan in TIA.__init__:
+        self._dbg_cooldown = 0
+        self._logged_p0fb_since_clear = False
+        self._prev_p0_top_y = None
+        self._frame_p0_top_y = None
+        self._logged_fall_trigger = False
+        self._last_logged_p0_x = None
         # Sync & Control
         self.vsync = 0      # $00: Vertical Sync Set-Clear
         self.vblank = 0     # $01: Vertical Blank Set-Clear
@@ -102,24 +109,25 @@ class TIA:
 
     def read(self, addr):
         reg = addr & 0x0F
-        if reg <= 0x07:
-            self._render_up_to_clock(self.clock)
-            if reg == 0x00:
-                return self.cxm0p
-            elif reg == 0x01:
-                return self.cxm1p
-            elif reg == 0x02:
-                return self.cxp0fb
-            elif reg == 0x03:
-                return self.cxp1fb
-            elif reg == 0x04:
-                return self.cxm0fb
-            elif reg == 0x05:
-                return self.cxm1fb
-            elif reg == 0x06:
-                return self.cxblpf
-            elif reg == 0x07:
-                return self.cxppmm
+        if reg == 0x02:
+            y = self.scanline - 37
+            return self.cxp0fb
+        if reg == 0x00:
+            return self.cxm0p
+        elif reg == 0x01:
+            return self.cxm1p
+        elif reg == 0x02:
+            return self.cxp0fb
+        elif reg == 0x03:
+            return self.cxp1fb
+        elif reg == 0x04:
+            return self.cxm0fb
+        elif reg == 0x05:
+            return self.cxm1fb
+        elif reg == 0x06:
+            return self.cxblpf
+        elif reg == 0x07:
+            return self.cxppmm
         elif reg == 0x0C:
             return self.inpt4
         elif reg == 0x0D:
@@ -129,17 +137,26 @@ class TIA:
     def write(self, addr, val):
         self._render_up_to_clock(self.clock)
         reg = addr & 0x3F
+
         v = (val or 0) & 0xFF
 
-        if reg == 0x00:    # VSYNC (einde van VSYNC start het nieuwe frame)
-            if not (v & 0x02) and (self.vsync & 0x02):
+        if reg == 0x00:
+            if (v & 0x02) and not (self.vsync & 0x02):
                 self.scanline = 0
-                self.frame_ready = True
+                if self._dbg_cooldown > 0:
+                    self._dbg_cooldown -= 1
+            self.vsync = v
+
+        if reg == 0x00:    # VSYNC
+            if (v & 0x02) and not (self.vsync & 0x02):
+                self.scanline = 0
             self.vsync = v
         elif reg == 0x01:  # VBLANK
             self.vblank = v
         elif reg == 0x02:  # WSYNC
+            self._logged_p0fb_since_clear = False
             self.wsync = True
+
         elif reg == 0x04:  # NUSIZ0
             self.nusiz0 = v
         elif reg == 0x05:  # NUSIZ1
@@ -165,11 +182,11 @@ class TIA:
         elif reg == 0x0F:  # PF2
             self.pf2 = v
         elif reg == 0x10:  # RESP0
-            self.p0_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
+            self.p0_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 3
             if self.resmp0:
                 self.m0_x = (self.p0_x + 4) % 160
         elif reg == 0x11:  # RESP1
-            self.p1_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
+            self.p1_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 3
             if self.resmp1:
                 self.m1_x = (self.p1_x + 4) % 160
         elif reg == 0x12:  # RESM0
@@ -269,6 +286,8 @@ class TIA:
 
         start = self.rendered_clock if self.rendered_clock > 68 else 68
         end = target_clock if target_clock < 228 else 228
+        if y == 0 and start <= 68:
+            self._frame_p0_top_y = None
         if start >= end:
             self.rendered_clock = target_clock
             return
@@ -390,6 +409,8 @@ class TIA:
             else:
                 pf_on = bool((pf2 >> (pf_x - 12)) & 0x01)
 
+            if p0_on and self._frame_p0_top_y is None:
+                self._frame_p0_top_y = y
             # Collisions
             if m0_on:
                 if p1_on: cxm0p |= 0x80
@@ -463,6 +484,10 @@ class TIA:
             self.scanline += 1
             if self.scanline >= 262:
                 self.scanline = 0
+                self.frame_ready = True
+                top_y = self._frame_p0_top_y
+                if top_y is not None:
+                    self._prev_p0_top_y = top_y
 
     def ntsc_to_rgb(self, color_byte):
         hue = (color_byte >> 4) & 0x0F
