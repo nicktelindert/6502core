@@ -1,4 +1,5 @@
 import sys
+import os
 from tia import TIA
 from riot import RIOT
 from cartridge import create_cartridge
@@ -44,7 +45,7 @@ def main():
 
     tia = TIA()
     riot = RIOT()
-    cart = create_cartridge(rom_data)
+    cart = create_cartridge(rom_data, os.path.basename(rom_path))
     bus = Bus(tia, riot, cart)
     cpu = CPU6507(bus)
     display = Display(scale=4)
@@ -56,6 +57,7 @@ def main():
         running = display.render(tia.framebuffer)
         # Voorbeeld van compacte debug-regels in je F1-overlay:
         display.set_debug_lines([
+            f"ROM:{cart.name}  ROM SIZE:{cart.size_kb:3d}K",
             f"SL:{tia.scanline:3d}  CLK:{tia.clock:3d}",
             f"P0:{tia.debug_p0_x:3d}, (HM:{tia.hmp0 >> 4:X}) | P1:{tia.debug_p1_x:3d} (HM:{tia.hmp1 >> 4:X})",
             f"M0:{tia.m0_x:3d} (HM:{tia.hmm0 >> 4:X}) | M1:{tia.m1_x:3d} (HM:{tia.hmm1 >> 4:X}) | BL:{tia.bl_x:3d} (HM:{tia.hmbl >> 4:X})",
