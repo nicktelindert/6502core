@@ -9,13 +9,7 @@ Een cycle-accurate Atari 2600 (VCS) emulator geschreven in Python met Pygame, ge
 - **TIA Audio**: 2-kanaals geluidsweergave via 4-bit, 5-bit en 9-bit Linear Feedback Shift Registers (LFSR).
 - **RIOT 6532**: 128 bytes RAM, interval-timers en joystick/console-schakelaars.
 - **Debug Overlay**: Ingebouwde live inspector (`F1`) voor scanline, color clock en sprite-posities.
-
-## Geteste Games
-
-- *Pac-Man*
-- *Pitfall!*
-- *Jungle Hunt*
-- *Donkey Kong* (speelbaar; kleine mid-scanline playfield-offset in bewerking)
+- Rom selector toegevoegd met (`F2`) roms inladen die hij vanaf de folder laat die mijn naamloze emulator zelf aanmaakt bij de eerste start. Drop je roms er in en switch tussen de games met F2
 
 ## Installatie & Gebruik
 
@@ -41,10 +35,10 @@ Een cycle-accurate Atari 2600 (VCS) emulator geschreven in Python met Pygame, ge
 
 ## BUGS
 - Het geluid is nog een beetje om te janken, maar heb er een basis in zitten
-- Er zitten nog grafische bugs in, iets met de PF?
-- SC chips gaan niet helemaal goed
+- Rare glitches met Frogger
 
 ## Roadmap
 
 - [ ] Audio-output balanceren en resampling vloeiender maken
 - [ ] Stargate ondersteunen
+- [ ] App Image releasen
