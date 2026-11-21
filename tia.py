@@ -184,15 +184,15 @@ class TIA:
             else:
                 self.pf2 = v
         elif reg == 0x10:  # RESP0
-          scale, _ = self._nusiz_layout(self.nusiz0)
-          wide_delay = 3 if scale == 4 else (2 if scale == 2 else 0)
-          self.p0_x = (((self.clock - 68) + 5 + wide_delay) % 160) if self.clock >= 68 else 3
-          if self.resmp0:
-              self.m0_x = (self.p0_x + 4 * scale) % 160
+                    scale, _ = self._nusiz_layout(self.nusiz0)
+                    wide_delay = 1 if scale > 1 else 0
+                    self.p0_x = (((self.clock - 68) + 5 + wide_delay) % 160) if self.clock >= 68 else (3 + wide_delay)
+                    if self.resmp0:
+                        self.m0_x = (self.p0_x + 4 * scale) % 160
         elif reg == 0x11:  # RESP1
             scale, _ = self._nusiz_layout(self.nusiz1)
-            wide_delay = 3 if scale == 4 else (2 if scale == 2 else 0)
-            self.p1_x = (((self.clock - 68) + 5 + wide_delay) % 160) if self.clock >= 68 else 3
+            wide_delay = 1 if scale > 1 else 0
+            self.p1_x = (((self.clock - 68) + 5 + wide_delay) % 160) if self.clock >= 68 else (3 + wide_delay)
             if self.resmp1:
                 self.m1_x = (self.p1_x + 4 * scale) % 160
         elif reg == 0x12:  # RESM0
