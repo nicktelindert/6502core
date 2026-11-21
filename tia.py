@@ -20,11 +20,16 @@ class TIA:
         (184, 108, 24),  # F: Warm bruin / oker
     ]
 
+    # Registers die pas NA een +2 clock pipeline-delay zichtbaar worden
+    _DELAYED_REGS = frozenset((0x0D, 0x0E, 0x0F, 0x1B, 0x1C, 0x1F))
+    # Registers die het rasterbeeld helemaal niet direct wijzigen
+    _NON_VISUAL_REGS = frozenset((0x02, 0x03, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x20, 0x21, 0x22, 0x23, 0x24, 0x2B))
+
+
     def __init__(self):
         # Bovenaan in TIA.__init__:
         self.audio = TIAAudio()
         self._audio_mid_done = False
-        self.audio._resample_acc = 0.0
         self._frame_p0_top_y = None
         self.debug_p0_x = 0
         self.debug_p1_x = 0
@@ -107,6 +112,8 @@ class TIA:
         self.height = 200
         self.framebuffer = bytearray(self.width * self.height * 3)
         self.ntsc_lut = [self.ntsc_to_rgb(c) for c in range(256)]
+        self.ntsc_bytes = [bytes(rgb) for rgb in self.ntsc_lut]
+
 
     def _hm_offset(self, reg_val):
         raw = (reg_val >> 4) & 0x0F
@@ -141,9 +148,13 @@ class TIA:
         return 0
 
     def write(self, addr, val):
-        self._render_up_to_clock(self.clock)
         reg = addr & 0x3F
-        v = (val or 0) & 0xFF
+        v = val & 0xFF if val else 0
+
+        if reg in self._DELAYED_REGS:
+            self._render_up_to_clock(228 if self.clock >= 226 else self.clock + 2)
+        elif reg not in self._NON_VISUAL_REGS:
+            self._render_up_to_clock(self.clock)
 
         if reg == 0x00:    # VSYNC
             if (v & 0x02) and not (self.vsync & 0x02):
@@ -175,20 +186,18 @@ class TIA:
             self.refp0 = v
         elif reg == 0x0C:  # REFP1
             self.refp1 = v
-        elif reg in (0x0D, 0x0E, 0x0F):  # PF0, PF1, PF2 (TIA pipeline delay)
-            self._render_up_to_clock(min(228, self.clock + 2))
-            if reg == 0x0D:
-                self.pf0 = v
-            elif reg == 0x0E:
-                self.pf1 = v
-            else:
-                self.pf2 = v
+        elif reg == 0x0D:  # PF0
+            self.pf0 = v
+        elif reg == 0x0E:  # PF1
+            self.pf1 = v
+        elif reg == 0x0F:  # PF2
+            self.pf2 = v
         elif reg == 0x10:  # RESP0
-                    scale, _ = self._nusiz_layout(self.nusiz0)
-                    wide_delay = 1 if scale > 1 else 0
-                    self.p0_x = (((self.clock - 68) + 5 + wide_delay) % 160) if self.clock >= 68 else (3 + wide_delay)
-                    if self.resmp0:
-                        self.m0_x = (self.p0_x + 4 * scale) % 160
+            scale, _ = self._nusiz_layout(self.nusiz0)
+            wide_delay = 1 if scale > 1 else 0
+            self.p0_x = (((self.clock - 68) + 5 + wide_delay) % 160) if self.clock >= 68 else (3 + wide_delay)
+            if self.resmp0:
+                self.m0_x = (self.p0_x + 4 * scale) % 160
         elif reg == 0x11:  # RESP1
             scale, _ = self._nusiz_layout(self.nusiz1)
             wide_delay = 1 if scale > 1 else 0
@@ -213,21 +222,19 @@ class TIA:
             self.audio.audv[0] = v & 0x0F
         elif reg == 0x1A:  # AUDV1
             self.audio.audv[1] = v & 0x0F
-        elif reg in (0x1B, 0x1C, 0x1F):  # GRP0, GRP1, ENABL
-            self._render_up_to_clock(min(228, self.clock + 2))
-            if reg == 0x1B:
-                self.grp0 = v
-                self.grp1_old = self.grp1
-            elif reg == 0x1C:
-                self.grp1 = v
-                self.grp0_old = self.grp0
-                self.enabl_old = self.enabl
-            else:
-                self.enabl = v
+        elif reg == 0x1B:  # GRP0
+            self.grp0 = v
+            self.grp1_old = self.grp1
+        elif reg == 0x1C:  # GRP1
+            self.grp1 = v
+            self.grp0_old = self.grp0
+            self.enabl_old = self.enabl
         elif reg == 0x1D:  # ENAM0
             self.enam0 = v
         elif reg == 0x1E:  # ENAM1
             self.enam1 = v
+        elif reg == 0x1F:  # ENABL
+            self.enabl = v
         elif reg == 0x20:  # HMP0
             self.hmp0 = v
         elif reg == 0x21:  # HMP1
@@ -318,17 +325,17 @@ class TIA:
 
         fb = self.framebuffer
         row_offset = y * 480  # 160 * 3
+        x_start = start - 68
+        x_end = end - 68
 
         if self.vblank & 0x02:
-            for clk in range(start, end):
-                idx = row_offset + (clk - 68) * 3
-                fb[idx] = 0
-                fb[idx + 1] = 0
-                fb[idx + 2] = 0
+            s_idx = row_offset + x_start * 3
+            e_idx = row_offset + x_end * 3
+            fb[s_idx:e_idx] = b"\x00" * (e_idx - s_idx)
             self.rendered_clock = target_clock
             return
 
-        lut = self.ntsc_lut
+        lut_b = self.ntsc_bytes
         active_grp0 = self.grp0_old if self.vdelp0 else self.grp0
         active_grp1 = self.grp1_old if self.vdelp1 else self.grp1
         active_enabl = self.enabl_old if self.vdelbl else self.enabl
@@ -357,6 +364,7 @@ class TIA:
         pf0 = self.pf0
         pf1 = self.pf1
         pf2 = self.pf2
+        has_pf = bool(pf0 or pf1 or pf2)
         pf_ref = bool(self.ctrlpf & 0x01)
         pf_score = bool(self.ctrlpf & 0x02) and not (self.ctrlpf & 0x04)
         pf_prio = bool(self.ctrlpf & 0x04)
@@ -365,6 +373,15 @@ class TIA:
         colup1 = self.colup1
         colupf = self.colupf
         colubk = self.colubk
+
+        # Snelle pad als de hele span pure achtergrondkleur is (geen sprites, geen playfield)
+        if not (active_grp0 or active_grp1 or m0_en or m1_en or bl_en or has_pf):
+            s_idx = row_offset + x_start * 3
+            e_idx = row_offset + x_end * 3
+            fb[s_idx:e_idx] = lut_b[colubk] * (x_end - x_start)
+            if target_clock > self.rendered_clock:
+                self.rendered_clock = target_clock
+            return
 
         cxm0p = self.cxm0p
         cxm1p = self.cxm1p
@@ -375,91 +392,89 @@ class TIA:
         cxblpf = self.cxblpf
         cxppmm = self.cxppmm
 
-        for clk in range(start, end):
-            x = clk - 68
+        # Bouw playfield 40-staps bitrij buiten de pixel-lus
+        if has_pf:
+            pf_bits = [0] * 40
+            for i in range(4):
+                if (pf0 >> (4 + i)) & 1:
+                    pf_bits[i] = 1
+            for i in range(8):
+                if (pf1 >> (7 - i)) & 1:
+                    pf_bits[4 + i] = 1
+            for i in range(8):
+                if (pf2 >> i) & 1:
+                    pf_bits[12 + i] = 1
+            if pf_ref:
+                for i in range(20):
+                    pf_bits[39 - i] = pf_bits[i]
+            else:
+                for i in range(20):
+                    pf_bits[20 + i] = pf_bits[i]
 
-            # Player 0
+        idx = row_offset + x_start * 3
+        for x in range(x_start, x_end):
             p0_on = False
             if active_grp0:
                 for off in p0_offsets:
                     dx = x - (p0_x + off)
                     if 0 <= dx < p0_w:
                         px = dx // p0_scale
-                        bit = px if refp0 else (7 - px)
-                        if (active_grp0 >> bit) & 0x01:
+                        if (active_grp0 >> (px if refp0 else (7 - px))) & 1:
                             p0_on = True
                             break
 
-            # Player 1
             p1_on = False
             if active_grp1:
                 for off in p1_offsets:
                     dx = x - (p1_x + off)
                     if 0 <= dx < p1_w:
                         px = dx // p1_scale
-                        bit = px if refp1 else (7 - px)
-                        if (active_grp1 >> bit) & 0x01:
+                        if (active_grp1 >> (px if refp1 else (7 - px))) & 1:
                             p1_on = True
                             break
 
-            # Missiles & Ball (zonder  wrap over schermrand!)
             m0_on = False
             if m0_en:
                 for off in p0_offsets:
-                    dx = x - (m0_x + off)
-                    if 0 <= dx < m0_w:
+                    if 0 <= (x - (m0_x + off)) < m0_w:
                         m0_on = True
                         break
 
             m1_on = False
             if m1_en:
                 for off in p1_offsets:
-                    dx = x - (m1_x + off)
-                    if 0 <= dx < m1_w:
+                    if 0 <= (x - (m1_x + off)) < m1_w:
                         m1_on = True
                         break
 
             bl_on = bl_en and (0 <= (x - bl_x) < bl_w)
-
-            # Playfield
-            if x < 80:
-                pf_x = x >> 2
-            else:
-                rx = (x - 80) >> 2
-                pf_x = (19 - rx) if pf_ref else rx
-
-            if pf_x < 4:
-                pf_on = bool((pf0 >> (4 + pf_x)) & 0x01)
-            elif pf_x < 12:
-                pf_on = bool((pf1 >> (11 - pf_x)) & 0x01)
-            else:
-                pf_on = bool((pf2 >> (pf_x - 12)) & 0x01)
+            pf_on = bool(pf_bits[x >> 2]) if has_pf else False
 
             if p0_on and self._frame_p0_top_y is None:
                 self._frame_p0_top_y = y
-            # Collisions
-            if m0_on:
-                if p1_on: cxm0p |= 0x80
-                if p0_on: cxm0p |= 0x40
-                if pf_on: cxm0fb |= 0x80
-                if bl_on: cxm0fb |= 0x40
-                if m1_on: cxppmm |= 0x40
-            if m1_on:
-                if p0_on: cxm1p |= 0x80
-                if p1_on: cxm1p |= 0x40
-                if pf_on: cxm1fb |= 0x80
-                if bl_on: cxm1fb |= 0x40
-            if p0_on:
-                if pf_on: cxp0fb |= 0x80
-                if bl_on: cxp0fb |= 0x40
-                if p1_on: cxppmm |= 0x80
-            if p1_on:
-                if pf_on: cxp1fb |= 0x80
-                if bl_on: cxp1fb |= 0x40
-            if bl_on and pf_on:
-                cxblpf |= 0x80
 
-            # Kleurprioriteit
+            if p0_on or p1_on or m0_on or m1_on or bl_on:
+                if m0_on:
+                    if p1_on: cxm0p |= 0x80
+                    if p0_on: cxm0p |= 0x40
+                    if pf_on: cxm0fb |= 0x80
+                    if bl_on: cxm0fb |= 0x40
+                    if m1_on: cxppmm |= 0x40
+                if m1_on:
+                    if p0_on: cxm1p |= 0x80
+                    if p1_on: cxm1p |= 0x40
+                    if pf_on: cxm1fb |= 0x80
+                    if bl_on: cxm1fb |= 0x40
+                if p0_on:
+                    if pf_on: cxp0fb |= 0x80
+                    if bl_on: cxp0fb |= 0x40
+                    if p1_on: cxppmm |= 0x80
+                if p1_on:
+                    if pf_on: cxp1fb |= 0x80
+                    if bl_on: cxp1fb |= 0x40
+                if bl_on and pf_on:
+                    cxblpf |= 0x80
+
             pfc = (colup0 if x < 80 else colup1) if pf_score else colupf
             if pf_prio:
                 if pf_on or bl_on:
@@ -480,11 +495,8 @@ class TIA:
                 else:
                     c = colubk
 
-            r, g, b = lut[c]
-            idx = row_offset + x * 3
-            fb[idx] = r
-            fb[idx + 1] = g
-            fb[idx + 2] = b
+            fb[idx:idx + 3] = lut_b[c]
+            idx += 3
 
         self.cxm0p = cxm0p
         self.cxm1p = cxm1p
@@ -494,22 +506,24 @@ class TIA:
         self.cxm1fb = cxm1fb
         self.cxblpf = cxblpf
         self.cxppmm = cxppmm
-        if target_clock > self.rendered_clock: self.rendered_clock = target_clock
+        if target_clock > self.rendered_clock:
+            self.rendered_clock = target_clock
 
     def step(self, color_clocks):
         """Laat de TIA 'color_clocks' vooruitlopen (3x CPU cycles)."""
         self.clock += color_clocks
+        if self.clock + color_clocks < 68:
+            return
 
         if 40 <= self.scanline <= 190:
             if self.grp0 != 0:
                 self.debug_p0_x = self.p0_x
             if self.grp1 != 0:
                 self.debug_p1_x = self.p1_x
-        if not self._audio_mid_done and self.clock >= 114:
+        if not self._audio_mid_done and self.clock == 69 or self.clock == 183:
             self.audio.tick_half_scanline()
             self._audio_mid_done = True
         while self.clock >= 228:
-            self._audio_mid_done = False
             self._render_up_to_clock(228)
             if self.wsync:
                 self.clock = 0
@@ -519,7 +533,6 @@ class TIA:
             self.rendered_clock = 0
             self.scanline += 1
             if self.scanline >= 262:
-                self.audio.tick_half_scanline()
                 self._audio_mid_done = False
                 self.scanline = 0
                 self.frame_ready = True

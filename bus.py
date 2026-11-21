@@ -6,42 +6,62 @@ class Bus:
         self.ram = bytearray(128)
         self.cycles_this_step = 0
 
+        # Directe method-referenties schelen miljoenen attribute-lookups per seconde
+        self._tia_step = tia.step
+        self._riot_step = riot.step
+        self._cart_read = cartridge.read
+        self._cart_write = cartridge.write
+        self._tia_read = tia.read
+        self._tia_write = tia.write
+        self._riot_read = riot.read
+        self._riot_write = riot.write
+
     def tick(self, cycles: int = 1) -> None:
-        for _ in range(cycles):
-            self.cycles_this_step += 1
-            self.tia.step(3)
-            self.riot.step(1)
+        self.cycles_this_step += cycles
+        self._tia_step(cycles * 3)
+        self._riot_step(cycles)
 
     def read(self, address: int) -> int:
-        self.tick(1)
+        self.cycles_this_step += 1
+        self._tia_step(3)
+        self._riot_step(1)
+
         addr = address & 0x1FFF
         if addr & 0x1000:
-            return self.cartridge.read(addr) & 0xFF
-        if (addr & 0x0080) != 0 and (addr & 0x0200) == 0:
+            return self._cart_read(addr)
+        if addr & 0x0080:
+            if addr & 0x0200:
+                return self._riot_read(addr)
             return self.ram[addr & 0x7F]
-        if (addr & 0x0080) != 0 and (addr & 0x0200) != 0:
-            return self.riot.read(addr) & 0xFF
-        return self.tia.read(addr) & 0xFF
+        return self._tia_read(addr)
 
     def write(self, address: int, value: int) -> None:
-        self.tick(1)
+        self.cycles_this_step += 1
+        self._tia_step(3)
+        self._riot_step(1)
+
         addr = address & 0x1FFF
-        v = (value or 0) & 0xFF
+        v = value & 0xFF if value else 0
         if addr & 0x1000:
-            self.cartridge.write(addr, v)
+            self._cart_write(addr, v)
         elif (addr & 0x0080) == 0:
-            self.tia.write(addr & 0x3F, v)
+            self._tia_write(addr & 0x3F, v)
         elif (addr & 0x0200) == 0:
             self.ram[addr & 0x7F] = v
         else:
-            self.riot.write(addr, v)    
-    
+            self._riot_write(addr, v)
+
     def step_frame(self, cpu) -> None:
-        self.tia.frame_ready = False
-        while not self.tia.frame_ready:
-            if self.tia.wsync:
-                remaining = 228 - self.tia.clock
-                self.tia.step(remaining)
-                self.riot.step(max(1, remaining // 3))
+        tia = self.tia
+        tia_step = self._tia_step
+        riot_step = self._riot_step
+        cpu_step = cpu.step
+
+        tia.frame_ready = False
+        while not tia.frame_ready:
+            if tia.wsync:
+                remaining = 228 - tia.clock
+                tia_step(remaining)
+                riot_step(remaining // 3 if remaining >= 3 else 1)
             else:
-                cpu.step()
+                cpu_step()
