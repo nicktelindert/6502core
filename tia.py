@@ -185,19 +185,19 @@ class TIA:
         elif reg == 0x0F:  # PF2
             self.pf2 = v
         elif reg == 0x10:  # RESP0
-            self.p0_x = ((self.clock - 68) + 8) % 160 if self.clock >= 68 else 3
+            self.p0_x = ((self.clock - 68) + 8)  if self.clock >= 68 else 3
             if self.resmp0:
-                self.m0_x = (self.p0_x + 4) % 160
+                self.m0_x = (self.p0_x + 4)
         elif reg == 0x11:  # RESP1
-            self.p1_x = ((self.clock - 68) + 8) % 160 if self.clock >= 68 else 3
+            self.p1_x = ((self.clock - 68) + 8)  if self.clock >= 68 else 3
             if self.resmp1:
-                self.m1_x = (self.p1_x + 4) % 160
+                self.m1_x = (self.p1_x + 4)
         elif reg == 0x12:  # RESM0
-            self.m0_x = ((self.clock - 68) + 7) % 160 if self.clock >= 68 else 2
+            self.m0_x = ((self.clock - 68) + 7)  if self.clock >= 68 else 2
         elif reg == 0x13:  # RESM1
-            self.m1_x = ((self.clock - 68) + 7) % 160 if self.clock >= 68 else 2
+            self.m1_x = ((self.clock - 68) + 7)  if self.clock >= 68 else 2
         elif reg == 0x14:  # RESBL
-            self.bl_x = ((self.clock - 68) + 7) % 160 if self.clock >= 68 else 2
+            self.bl_x = ((self.clock - 68) + 7)  if self.clock >= 68 else 2
         elif reg == 0x1B:  # GRP0
             self.grp0 = v
             self.grp1_old = self.grp1
@@ -229,24 +229,24 @@ class TIA:
             self.vdelbl = v & 0x01
         elif reg == 0x28:  # RESMP0
             if self.resmp0 or (v & 0x02):
-                self.m0_x = (self.p0_x + 4) % 160
+                self.m0_x = (self.p0_x + 4)
             self.resmp0 = v & 0x02
         elif reg == 0x29:  # RESMP1
             if self.resmp1 or (v & 0x02):
-                self.m1_x = (self.p1_x + 4) % 160
+                self.m1_x = (self.p1_x + 4)
             self.resmp1 = v & 0x02
         elif reg == 0x2A:  # HMOVE
-            self.p0_x = (self.p0_x + self._hm_offset(self.hmp0)) % 160
-            self.p1_x = (self.p1_x + self._hm_offset(self.hmp1)) % 160
+            self.p0_x = (self.p0_x + self._hm_offset(self.hmp0)) % 228
+            self.p1_x = (self.p1_x + self._hm_offset(self.hmp1)) % 228
             if self.resmp0:
-                self.m0_x = (self.p0_x + 4) % 160
+                self.m0_x = (self.p0_x + 4) % 228
             else:
-                self.m0_x = (self.m0_x + self._hm_offset(self.hmm0)) % 160
+                self.m0_x = (self.m0_x + self._hm_offset(self.hmm0)) % 228
             if self.resmp1:
-                self.m1_x = (self.p1_x + 4) % 160
+                self.m1_x = (self.p1_x + 4) % 228
             else:
-                self.m1_x = (self.m1_x + self._hm_offset(self.hmm1)) % 160
-            self.bl_x = (self.bl_x + self._hm_offset(self.hmbl)) % 160
+                self.m1_x = (self.m1_x + self._hm_offset(self.hmm1)) % 228
+            self.bl_x = (self.bl_x + self._hm_offset(self.hmbl)) % 228
         elif reg == 0x2B:  # HMCLR
             self.hmp0 = 0x00
             self.hmp1 = 0x00
@@ -373,8 +373,8 @@ class TIA:
             p0_on = False
             if active_grp0:
                 for off in p0_offsets:
-                    dx = (x - (p0_x + off)) % 160
-                    if dx < p0_w:
+                    dx = x - (p0_x + off)
+                    if 0 <= dx < p0_w:
                         px = dx // p0_scale
                         bit = px if refp0 else (7 - px)
                         if (active_grp0 >> bit) & 0x01:
@@ -385,30 +385,32 @@ class TIA:
             p1_on = False
             if active_grp1:
                 for off in p1_offsets:
-                    dx = (x - (p1_x + off)) % 160
-                    if dx < p1_w:
+                    dx = x - (p1_x + off)
+                    if 0 <= dx < p1_w:
                         px = dx // p1_scale
                         bit = px if refp1 else (7 - px)
                         if (active_grp1 >> bit) & 0x01:
                             p1_on = True
                             break
 
-            # Missiles & Ball
+            # Missiles & Ball (zonder  wrap over schermrand!)
             m0_on = False
             if m0_en:
                 for off in p0_offsets:
-                    if ((x - (m0_x + off)) % 160) < m0_w:
+                    dx = x - (m0_x + off)
+                    if 0 <= dx < m0_w:
                         m0_on = True
                         break
 
             m1_on = False
             if m1_en:
                 for off in p1_offsets:
-                    if ((x - (m1_x + off)) % 160) < m1_w:
+                    dx = x - (m1_x + off)
+                    if 0 <= dx < m1_w:
                         m1_on = True
                         break
 
-            bl_on = bl_en and (((x - bl_x) % 160) < bl_w)
+            bl_on = bl_en and (0 <= (x - bl_x) < bl_w)
 
             # Playfield
             if x < 80:
