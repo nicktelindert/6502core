@@ -16,22 +16,24 @@ class Bus:
         self._riot_read = riot.read
         self._riot_write = riot.write
 
-        # Optionele snelle ROM-buffer (alleen actief als cartridge een directe buffer heeft)
+        # In Bus.__init__:
         self._fast_rom = None
-        self._fast_rom_mask = 0x0FFF
-        self._fast_rom_base = 0
-        self._bank_attr = None
+        self._fast_banks = None
+        self._fast_mask = 0x0FFF
+        self._superchip_ram = None
 
         rom = getattr(cartridge, "rom", None)
-        if isinstance(rom, (bytes, bytearray, memoryview)) and len(rom) >= 4096:
-            # Controleer of len(rom) een macht van 2 is voor snelle maskering
-            if (len(rom) & (len(rom) - 1)) == 0:
-                self._fast_rom = rom
-                self._fast_rom_mask = len(rom) - 1
-                if hasattr(cartridge, "current_bank"):
-                    self._bank_attr = "current_bank"
-                elif hasattr(cartridge, "bank"):
-                    self._bank_attr = "bank"
+        banks = getattr(cartridge, "banks", None)
+
+        if isinstance(rom, (bytes, bytearray, memoryview)):
+            self._fast_rom = rom
+            self._fast_mask = getattr(cartridge, "mask", len(rom) - 1)
+        elif isinstance(banks, (list, tuple)) and len(banks) > 0:
+            self._fast_banks = banks
+            self._fast_mask = 0x0FFF
+            sc_ram = getattr(cartridge, "ram", None)
+            if isinstance(sc_ram, bytearray) and len(sc_ram) == 128:
+                self._superchip_ram = sc_ram
 
     def _get_fast_rom_base(self) -> int:
         attr = self._bank_attr
@@ -52,14 +54,20 @@ class Bus:
 
         addr = address & 0x1FFF
         if addr & 0x1000:
+            if self._superchip_ram is not None and 0x1080 <= addr <= 0x10FF:
+                return self._superchip_ram[addr & 0x007F]
+
+            if 0x1FF6 <= addr <= 0x1FF9:
+                return self._cart_read(addr)
+
             fast_rom = self._fast_rom
-            # Laat mogelijke bankswitch-hotspots (bovenste 16 bytes van het 4K-venster)
-            # altijd via cartridge.read() lopen zodat hotspots getriggerd blijven.
-            if fast_rom is not None and (addr & 0x0FF0) != 0x0FF0:
-                offset = addr & 0x0FFF
-                if self._bank_attr is not None:
-                    offset = (offset + self._get_fast_rom_base()) & self._fast_rom_mask
-                return fast_rom[offset]
+            if fast_rom is not None:
+                return fast_rom[addr & self._fast_mask]
+
+            fast_banks = self._fast_banks
+            if fast_banks is not None:
+                return fast_banks[self.cartridge.current_bank][addr & 0x0FFF]
+
             return self._cart_read(addr)
 
         if addr & 0x0080:
