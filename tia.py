@@ -29,6 +29,7 @@ class TIA:
     def __init__(self):
         # Bovenaan in TIA.__init__:
         self.audio = TIAAudio()
+        self._audio_clock = 0
         self._audio_mid_done = False
         self._frame_p0_top_y = None
         self.debug_p0_x = 0
@@ -290,6 +291,7 @@ class TIA:
             self.cxm1fb = 0x00
             self.cxblpf = 0x00
             self.cxppmm = 0x00
+    
 
     def _nusiz_layout(self, nusiz):
         mode = nusiz & 0x07
@@ -512,6 +514,9 @@ class TIA:
     def step(self, color_clocks):
         """Laat de TIA 'color_clocks' vooruitlopen (3x CPU cycles)."""
         self.clock += color_clocks
+        prev = self._audio_clock
+        self._audio_clock += color_clocks
+
         if self.clock + color_clocks < 68:
             return
 
@@ -520,9 +525,10 @@ class TIA:
                 self.debug_p0_x = self.p0_x
             if self.grp1 != 0:
                 self.debug_p1_x = self.p1_x
-        if not self._audio_mid_done and self.clock == 69 or self.clock == 183:
+
+        while self._audio_clock >= 114:
+            self._audio_clock -= 114
             self.audio.tick_half_scanline()
-            self._audio_mid_done = True
         while self.clock >= 228:
             self._render_up_to_clock(228)
             if self.wsync:
