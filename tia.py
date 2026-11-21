@@ -22,7 +22,6 @@ class TIA:
 
     def __init__(self):
         # Bovenaan in TIA.__init__:
-        self._pf_pending = []  # lijst van (target_clock, reg, val)
         self.audio = TIAAudio()
         self._audio_mid_done = False
         self.audio._resample_acc = 0.0
