@@ -514,7 +514,6 @@ class TIA:
     def step(self, color_clocks):
         """Laat de TIA 'color_clocks' vooruitlopen (3x CPU cycles)."""
         self.clock += color_clocks
-        prev = self._audio_clock
         self._audio_clock += color_clocks
 
         if self.clock + color_clocks < 68:
