@@ -66,12 +66,6 @@ def main():
         if bus is not None and not display.show_rom_menu:
             handle_input(cpu, tia, riot)
             bus.step_frame(cpu)
-            display.set_debug_lines([
-                f"ROM:{cart.name}",
-                f"SL:{tia.scanline:3d}  CLK:{tia.clock:3d}",
-                f"P0:{tia.debug_p0_x:3d}, (HM:{tia.hmp0 >> 4:X}) | P1:{tia.debug_p1_x:3d} (HM:{tia.hmp1 >> 4:X})",
-                f"M0:{tia.m0_x:3d} (HM:{tia.hmm0 >> 4:X}) | M1:{tia.m1_x:3d} (HM:{tia.hmm1 >> 4:X}) | BL:{tia.bl_x:3d} (HM:{tia.hmbl >> 4:X})",
-            ])
 
         framebuffer = tia.framebuffer if tia is not None else None
         running, chosen_rom = display.render(framebuffer)

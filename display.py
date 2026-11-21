@@ -75,7 +75,8 @@ class Display:
             self._draw_rom_menu()
 
         pygame.display.flip()
-        self.clock.tick(60)
+        self.clock.tick(0)
+    
         return True, chosen_rom
 
     def _draw_help(self):
@@ -85,6 +86,8 @@ class Display:
         self.screen.blit(overlay, (15, 15))
         self.screen.blit(self.font.render("F1: Help | F2: ROMs | ESC: Afsluiten", True, (0, 255, 120)), (25, 25))
         self.screen.blit(self.font.render("ASWD: Bewegen CTRL/SHIFT: action buttons", True, (0, 255, 120)), (25, 55))
+        self.screen.blit(self.font.render(f"FPS: {self.clock.get_fps()}", True, (0, 255, 120)), (25, 85))
+
         for i, line in enumerate(self.debug_lines):
             surf = self.font.render(line, True, (0, 255, 120))
             self.screen.blit(surf, (25, 75 + i * 20))
