@@ -62,7 +62,7 @@ class Display:
                         chosen_rom = os.path.join(self.rom_dir, self.roms[self.selected_rom_idx])
 
         if framebuffer is not None:
-            frame_surface = pygame.image.frombuffer(framebuffer, (160, 192), "RGB")
+            frame_surface = pygame.image.frombuffer(framebuffer, (160, 200), "RGB")
             scaled_surface = pygame.transform.scale(frame_surface, (self.width, self.height))
             self.screen.blit(scaled_surface, (0, 0))
         else:

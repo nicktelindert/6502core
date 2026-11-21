@@ -104,7 +104,7 @@ class TIA:
 
         # Snelle flat RGB framebuffer (160 * 192 * 3 bytes) + NTSC lookup table
         self.width = 160
-        self.height = 192
+        self.height = 200
         self.framebuffer = bytearray(self.width * self.height * 3)
         self.ntsc_lut = [self.ntsc_to_rgb(c) for c in range(256)]
 
@@ -143,23 +143,20 @@ class TIA:
     def write(self, addr, val):
         self._render_up_to_clock(self.clock)
         reg = addr & 0x3F
-
         v = (val or 0) & 0xFF
-
-        if reg == 0x00:
-            if (v & 0x02) and not (self.vsync & 0x02):
-                self.scanline = 0
-            self.vsync = v
 
         if reg == 0x00:    # VSYNC
             if (v & 0x02) and not (self.vsync & 0x02):
+                if self.scanline >= 200:
+                    self.frame_ready = True
+                    self.audio.flush_frame()
                 self.scanline = 0
             self.vsync = v
         elif reg == 0x01:  # VBLANK
             self.vblank = v
         elif reg == 0x02:  # WSYNC
-            self.wsync = True
-
+            if self.clock != 0:
+                self.wsync = True
         elif reg == 0x04:  # NUSIZ0
             self.nusiz0 = v
         elif reg == 0x05:  # NUSIZ1
@@ -178,39 +175,59 @@ class TIA:
             self.refp0 = v
         elif reg == 0x0C:  # REFP1
             self.refp1 = v
-        elif reg == 0x0D:  # PF0
-            self.pf0 = v
-        elif reg == 0x0E:  # PF1
-            self.pf1 = v
-        elif reg == 0x0F:  # PF2
-            self.pf2 = v
+        elif reg in (0x0D, 0x0E, 0x0F):  # PF0, PF1, PF2 (TIA pipeline delay)
+            self._render_up_to_clock(min(228, self.clock + 2))
+            if reg == 0x0D:
+                self.pf0 = v
+            elif reg == 0x0E:
+                self.pf1 = v
+            else:
+                self.pf2 = v
         elif reg == 0x10:  # RESP0
-            self.p0_x = ((self.clock - 68) + 8)  if self.clock >= 68 else 3
-            if self.resmp0:
-                self.m0_x = (self.p0_x + 4)
+          scale, _ = self._nusiz_layout(self.nusiz0)
+          wide_delay = 3 if scale == 4 else (2 if scale == 2 else 0)
+          self.p0_x = (((self.clock - 68) + 5 + wide_delay) % 160) if self.clock >= 68 else 3
+          if self.resmp0:
+              self.m0_x = (self.p0_x + 4 * scale) % 160
         elif reg == 0x11:  # RESP1
-            self.p1_x = ((self.clock - 68) + 8)  if self.clock >= 68 else 3
+            scale, _ = self._nusiz_layout(self.nusiz1)
+            wide_delay = 3 if scale == 4 else (2 if scale == 2 else 0)
+            self.p1_x = (((self.clock - 68) + 5 + wide_delay) % 160) if self.clock >= 68 else 3
             if self.resmp1:
-                self.m1_x = (self.p1_x + 4)
+                self.m1_x = (self.p1_x + 4 * scale) % 160
         elif reg == 0x12:  # RESM0
-            self.m0_x = ((self.clock - 68) + 7)  if self.clock >= 68 else 2
+            self.m0_x = (((self.clock - 68) + 4) % 160) if self.clock >= 68 else 2
         elif reg == 0x13:  # RESM1
-            self.m1_x = ((self.clock - 68) + 7)  if self.clock >= 68 else 2
+            self.m1_x = (((self.clock - 68) + 4) % 160) if self.clock >= 68 else 2
         elif reg == 0x14:  # RESBL
-            self.bl_x = ((self.clock - 68) + 7)  if self.clock >= 68 else 2
-        elif reg == 0x1B:  # GRP0
-            self.grp0 = v
-            self.grp1_old = self.grp1
-        elif reg == 0x1C:  # GRP1
-            self.grp1 = v
-            self.grp0_old = self.grp0
-            self.enabl_old = self.enabl
+            self.bl_x = (((self.clock - 68) + 4) % 160) if self.clock >= 68 else 2
+        elif reg == 0x15:  # AUDC0
+            self.audio.audc[0] = v & 0x0F
+        elif reg == 0x16:  # AUDC1
+            self.audio.audc[1] = v & 0x0F
+        elif reg == 0x17:  # AUDF0
+            self.audio.audf[0] = v & 0x1F
+        elif reg == 0x18:  # AUDF1
+            self.audio.audf[1] = v & 0x1F
+        elif reg == 0x19:  # AUDV0
+            self.audio.audv[0] = v & 0x0F
+        elif reg == 0x1A:  # AUDV1
+            self.audio.audv[1] = v & 0x0F
+        elif reg in (0x1B, 0x1C, 0x1F):  # GRP0, GRP1, ENABL
+            self._render_up_to_clock(min(228, self.clock + 2))
+            if reg == 0x1B:
+                self.grp0 = v
+                self.grp1_old = self.grp1
+            elif reg == 0x1C:
+                self.grp1 = v
+                self.grp0_old = self.grp0
+                self.enabl_old = self.enabl
+            else:
+                self.enabl = v
         elif reg == 0x1D:  # ENAM0
             self.enam0 = v
         elif reg == 0x1E:  # ENAM1
             self.enam1 = v
-        elif reg == 0x1F:  # ENABL
-            self.enabl = v
         elif reg == 0x20:  # HMP0
             self.hmp0 = v
         elif reg == 0x21:  # HMP1
@@ -228,25 +245,29 @@ class TIA:
         elif reg == 0x27:  # VDELBL
             self.vdelbl = v & 0x01
         elif reg == 0x28:  # RESMP0
+            scale, _ = self._nusiz_layout(self.nusiz0)
             if self.resmp0 or (v & 0x02):
-                self.m0_x = (self.p0_x + 4)
+                self.m0_x = (self.p0_x + 4 * scale) % 160
             self.resmp0 = v & 0x02
         elif reg == 0x29:  # RESMP1
+            scale, _ = self._nusiz_layout(self.nusiz1)
             if self.resmp1 or (v & 0x02):
-                self.m1_x = (self.p1_x + 4)
+                self.m1_x = (self.p1_x + 4 * scale) % 160
             self.resmp1 = v & 0x02
         elif reg == 0x2A:  # HMOVE
-            self.p0_x = (self.p0_x + self._hm_offset(self.hmp0)) % 228
-            self.p1_x = (self.p1_x + self._hm_offset(self.hmp1)) % 228
+            scale0, _ = self._nusiz_layout(self.nusiz0)
+            scale1, _ = self._nusiz_layout(self.nusiz1)
+            self.p0_x = (self.p0_x + self._hm_offset(self.hmp0)) % 160
+            self.p1_x = (self.p1_x + self._hm_offset(self.hmp1)) % 160
             if self.resmp0:
-                self.m0_x = (self.p0_x + 4) % 228
+                self.m0_x = (self.p0_x + 4 * scale0) % 160
             else:
-                self.m0_x = (self.m0_x + self._hm_offset(self.hmm0)) % 228
+                self.m0_x = (self.m0_x + self._hm_offset(self.hmm0)) % 160
             if self.resmp1:
-                self.m1_x = (self.p1_x + 4) % 228
+                self.m1_x = (self.p1_x + 4 * scale1) % 160
             else:
-                self.m1_x = (self.m1_x + self._hm_offset(self.hmm1)) % 228
-            self.bl_x = (self.bl_x + self._hm_offset(self.hmbl)) % 228
+                self.m1_x = (self.m1_x + self._hm_offset(self.hmm1)) % 160
+            self.bl_x = (self.bl_x + self._hm_offset(self.hmbl)) % 160
         elif reg == 0x2B:  # HMCLR
             self.hmp0 = 0x00
             self.hmp1 = 0x00
@@ -262,18 +283,6 @@ class TIA:
             self.cxm1fb = 0x00
             self.cxblpf = 0x00
             self.cxppmm = 0x00
-        elif reg == 0x15:  # AUDC0
-            self.audio.audc[0] = val & 0x0F
-        elif reg == 0x16:  # AUDC1
-            self.audio.audc[1] = val & 0x0F
-        elif reg == 0x17:  # AUDF0
-            self.audio.audf[0] = val & 0x1F
-        elif reg == 0x18:  # AUDF1
-            self.audio.audf[1] = val & 0x1F
-        elif reg == 0x19:  # AUDV0
-            self.audio.audv[0] = val & 0x0F
-        elif reg == 0x1A:  # AUDV1
-            self.audio.audv[1] = val & 0x0F
 
     def _nusiz_layout(self, nusiz):
         mode = nusiz & 0x07
@@ -294,7 +303,7 @@ class TIA:
         return 1, (0,)
 
     def _render_up_to_clock(self, target_clock):
-        y = self.scanline - 37
+        y = self.scanline - 40
         if not (0 <= y < self.height):
             self.rendered_clock = target_clock
             return
@@ -485,7 +494,7 @@ class TIA:
         self.cxm1fb = cxm1fb
         self.cxblpf = cxblpf
         self.cxppmm = cxppmm
-        self.rendered_clock = target_clock
+        if target_clock > self.rendered_clock: self.rendered_clock = target_clock
 
     def step(self, color_clocks):
         """Laat de TIA 'color_clocks' vooruitlopen (3x CPU cycles)."""

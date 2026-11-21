@@ -49,7 +49,8 @@ class CPU6507(AddressingMixin, InstructionsMixin):
         self.flags['N'] = 1 if (value & 0x80) else 0
 
     def step(self):
-        self._hist.append((self.PC, self.read(self.PC), self.A, self.X, self.Y, self.SP))
+        self.bus.cycles_this_step = 0
+        self._hist.append((self.PC, self.A, self.X, self.Y, self.SP))
         if len(self._hist) > 25:
             self._hist.pop(0)
 
@@ -59,7 +60,7 @@ class CPU6507(AddressingMixin, InstructionsMixin):
         opcode = self.fetch_byte()
         if opcode not in self.opcodes:
             for h in self._hist:
-                print(f"PC={hex(h[0])} OP={hex(h[1])} A={hex(h[2])} X={hex(h[3])} Y={hex(h[4])} SP={hex(h[5])}")
+                print(f"PC={hex(h[0])} A={hex(h[1])} X={hex(h[2])} Y={hex(h[3])} SP={hex(h[4])}")
             raise NotImplementedError(f"Onbekende opcode: {hex(opcode)} op {hex(self.PC - 1)}")
 
         instruction, mode, cycles, page_penalty = self.opcodes[opcode]
@@ -67,14 +68,11 @@ class CPU6507(AddressingMixin, InstructionsMixin):
         if self._page_crossed and page_penalty:
             self.extra_cycles += 1
 
-        base_flush = max(0, (cycles - 1) * 3)
-        self.bus.pending_tia_clocks = cycles * 3
-        self.bus.flush_tia(base_flush)
-
         instruction(target_addr)
 
-        total_cycles = cycles + self.extra_cycles
-        self.bus.pending_tia_clocks += self.extra_cycles * 3
-        self.bus.flush_tia()
-        self.bus.riot.step(total_cycles)
-        return total_cycles
+        expected_cycles = cycles + self.extra_cycles
+        remaining = expected_cycles - self.bus.cycles_this_step
+        if remaining > 0:
+            self.bus.tick(remaining)
+
+        return max(expected_cycles, self.bus.cycles_this_step)
