@@ -1,10 +1,11 @@
 # cartridge.py
+import zlib
 
-class Cartridge:
 
+
+class Cartridge:  
     def __init__(self, rom_data: bytes, name: str = "Unknown"):
         self.name = name
-        self.size_kb = len(rom_data) // 1024
 
     def read(self, address: int) -> int:
         raise NotImplementedError
@@ -91,17 +92,31 @@ class CartridgeF6SC(CartridgeF6):
             return
         super().write(addr, value)
 
+# Bekende CRC32 hashes voor 16K Superchip (F6SC) ROMs (o.a. Dig Dug NTSC & PAL)
+F6SC_CRC32 = {
+    0xB629D904,  # Dig Dug (USA)
+    0xD352052E,  # Dig Dug (Europe)
+    0x5A27B58C,  # Dig Dug (Rev 1)
+}
+
+def _is_f6sc(rom_data: bytes) -> bool:
+    if (zlib.crc32(rom_data) & 0xFFFFFFFF) in F6SC_CRC32:
+        return True
+    for b in range(4):
+        page = rom_data[b * 0x1000 : b * 0x1000 + 0x100]
+        if len(set(page)) == 1 and page[0] in (0x00, 0xFF):
+            return True
+    return False
+
 
 def create_cartridge(rom_data: bytes, name) -> Cartridge:
     size = len(rom_data)
     if size <= 0x1000:
         return Cartridge2K4K(rom_data, name)
     if size == 0x2000:
-        return CartridgeF8(rom_data, name)
+        return CartridgeF8(rom_data, f"{name} 8K")
     if size == 0x4000:
-        # Superchip (F6SC) ROMs hebben meestal identieke bytes (0xFF of 0x00) in $000-$0FF
-        first_page = rom_data[:0x100]
-        if len(set(first_page)) == 1:
-            return CartridgeF6SC(rom_data, name)
-        return CartridgeF6(rom_data, name)
+        if _is_f6sc(rom_data):
+            return CartridgeF6SC(rom_data, f"{name} 16K SC")
+        return CartridgeF6(rom_data, f"{name} 16K")
     raise ValueError(f"Niet-ondersteunde ROM-grootte: {size} bytes")

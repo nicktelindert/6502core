@@ -8,10 +8,10 @@ from cpu6507 import CPU6507
 from display import Display
 import pygame
 
+
 def handle_input(cpu, tia, riot):
     keys = pygame.key.get_pressed()
 
-    # Joystick Player 0 (SWCHA bits 4..7, 0 = ingedrukt)
     swcha = 0xFF
     if keys[pygame.K_w]:
         swcha &= ~0x10  # Omhoog
@@ -23,45 +23,60 @@ def handle_input(cpu, tia, riot):
         swcha &= ~0x80  # Rechts
     riot.swcha = swcha
 
-    # Vuurknop Player 0 (TIA INPT4 bit 7, 0 = ingedrukt)
     if keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]:
         tia.inpt4 = 0x00
     else:
         tia.inpt4 = 0x80
 
-    # Tweede knop: Shift als Game Reset (SWCHB bit 0, 0 = ingedrukt)
-    # (Veel Atari 2600 games gebruiken een 1-knops joystick + Reset op de console)
     swchb = 0x0B
     if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
         swchb &= ~0x01  # Reset
     riot.swchb = swchb
 
-def main():
 
-    rom_path = sys.argv[1]
+def check_rom_folder():
+    check_path = os.path.join(os.path.curdir, "roms")
+    if not os.path.isdir(check_path):
+        os.mkdir(check_path)
 
-    with open(rom_path, "rb") as f:
+
+def load_rom(path):
+    with open(path, "rb") as f:
         rom_data = f.read()
-
     tia = TIA()
     riot = RIOT()
-    cart = create_cartridge(rom_data, os.path.basename(rom_path))
+    cart = create_cartridge(rom_data, os.path.basename(path))
     bus = Bus(tia, riot, cart)
     cpu = CPU6507(bus)
-    display = Display(scale=4)
+    return tia, riot, cart, bus, cpu
+
+
+def main():
+    check_rom_folder()
+    display = Display(scale=4, rom_dir="roms")
+
+    if len(sys.argv) > 1:
+        tia, riot, cart, bus, cpu = load_rom(sys.argv[1])
+    else:
+        tia = riot = cart = bus = cpu = None
+        display.show_rom_menu = True
 
     running = True
     while running:
-        handle_input(cpu, tia, riot)
-        bus.step_frame(cpu)
-        running = display.render(tia.framebuffer)
-        # Voorbeeld van compacte debug-regels in je F1-overlay:
-        display.set_debug_lines([
-            f"ROM:{cart.name}  ROM SIZE:{cart.size_kb:3d}K",
-            f"SL:{tia.scanline:3d}  CLK:{tia.clock:3d}",
-            f"P0:{tia.debug_p0_x:3d}, (HM:{tia.hmp0 >> 4:X}) | P1:{tia.debug_p1_x:3d} (HM:{tia.hmp1 >> 4:X})",
-            f"M0:{tia.m0_x:3d} (HM:{tia.hmm0 >> 4:X}) | M1:{tia.m1_x:3d} (HM:{tia.hmm1 >> 4:X}) | BL:{tia.bl_x:3d} (HM:{tia.hmbl >> 4:X})",
-        ])
+        if bus is not None and not display.show_rom_menu:
+            handle_input(cpu, tia, riot)
+            bus.step_frame(cpu)
+            display.set_debug_lines([
+                f"ROM:{cart.name}",
+                f"SL:{tia.scanline:3d}  CLK:{tia.clock:3d}",
+                f"P0:{tia.debug_p0_x:3d}, (HM:{tia.hmp0 >> 4:X}) | P1:{tia.debug_p1_x:3d} (HM:{tia.hmp1 >> 4:X})",
+                f"M0:{tia.m0_x:3d} (HM:{tia.hmm0 >> 4:X}) | M1:{tia.m1_x:3d} (HM:{tia.hmm1 >> 4:X}) | BL:{tia.bl_x:3d} (HM:{tia.hmbl >> 4:X})",
+            ])
+
+        framebuffer = tia.framebuffer if tia is not None else None
+        running, chosen_rom = display.render(framebuffer)
+        if chosen_rom:
+            tia, riot, cart, bus, cpu = load_rom(chosen_rom)
 
     display.close()
 
