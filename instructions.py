@@ -14,7 +14,7 @@ OPCODE_SPECS = {
     # --- ASL ---
     0x0A: ("ASL", "mode_ACC", 2, False), 0x06: ("ASL", "mode_ZP",  5, False),
     0x16: ("ASL", "mode_ZPX", 6, False), 0x0E: ("ASL", "mode_ABS", 6, False),
-    0x1E: ("ASL", "mode_ABX", 7, False),
+    0x1E: ("ASL", "mode_ABX_W", 7, False),
 
     # --- BIT ---
     0x24: ("BIT", "mode_ZP",  3, False), 0x2C: ("BIT", "mode_ABS", 4, False),
@@ -44,7 +44,7 @@ OPCODE_SPECS = {
 
     # --- DEC / DEX / DEY ---
     0xC6: ("DEC", "mode_ZP",  5, False), 0xD6: ("DEC", "mode_ZPX", 6, False),
-    0xCE: ("DEC", "mode_ABS", 6, False), 0xDE: ("DEC", "mode_ABX", 7, False),
+    0xCE: ("DEC", "mode_ABS", 6, False), 0xDE: ("DEC", "mode_ABX_W", 7, False),
     0xCA: ("DEX", "mode_IMP", 2, False), 0x88: ("DEY", "mode_IMP", 2, False),
 
     # --- EOR ---
@@ -61,7 +61,7 @@ OPCODE_SPECS = {
 
     # --- INC / INX / INY ---
     0xE6: ("INC", "mode_ZP",  5, False), 0xF6: ("INC", "mode_ZPX", 6, False),
-    0xEE: ("INC", "mode_ABS", 6, False), 0xFE: ("INC", "mode_ABX", 7, False),
+    0xEE: ("INC", "mode_ABS", 6, False), 0xFE: ("INC", "mode_ABX_W", 7, False),
     0xE8: ("INX", "mode_IMP", 2, False), 0xC8: ("INY", "mode_IMP", 2, False),
 
     # --- LDA ---
@@ -83,7 +83,7 @@ OPCODE_SPECS = {
     # --- LSR ---
     0x4A: ("LSR", "mode_ACC", 2, False), 0x46: ("LSR", "mode_ZP",  5, False),
     0x56: ("LSR", "mode_ZPX", 6, False), 0x4E: ("LSR", "mode_ABS", 6, False),
-    0x5E: ("LSR", "mode_ABX", 7, False),
+    0x5E: ("LSR", "mode_ABX_W", 7, False),
 
     # --- NOP ---
     0xEA: ("NOP", "mode_IMP", 2, False),
@@ -101,12 +101,12 @@ OPCODE_SPECS = {
     # --- ROL ---
     0x2A: ("ROL", "mode_ACC", 2, False), 0x26: ("ROL", "mode_ZP",  5, False),
     0x36: ("ROL", "mode_ZPX", 6, False), 0x2E: ("ROL", "mode_ABS", 6, False),
-    0x3E: ("ROL", "mode_ABX", 7, False),
+    0x3E: ("ROL", "mode_ABX_W", 7, False),
 
     # --- ROR ---
     0x6A: ("ROR", "mode_ACC", 2, False), 0x66: ("ROR", "mode_ZP",  5, False),
     0x76: ("ROR", "mode_ZPX", 6, False), 0x6E: ("ROR", "mode_ABS", 6, False),
-    0x7E: ("ROR", "mode_ABX", 7, False),
+    0x7E: ("ROR", "mode_ABX_W", 7, False),
 
     # --- SBC ---
     0xE9: ("SBC", "mode_IMM", 2, False), 0xE5: ("SBC", "mode_ZP",  3, False),
@@ -116,9 +116,9 @@ OPCODE_SPECS = {
 
     # --- STA ---
     0x85: ("STA", "mode_ZP",  3, False), 0x95: ("STA", "mode_ZPX", 4, False),
-    0x8D: ("STA", "mode_ABS", 4, False), 0x9D: ("STA", "mode_ABX", 5, False),
-    0x99: ("STA", "mode_ABY", 5, False), 0x81: ("STA", "mode_INX", 6, False),
-    0x91: ("STA", "mode_INY", 6, False),
+    0x8D: ("STA", "mode_ABS", 4, False), 0x9D: ("STA", "mode_ABX_W", 5, False),
+    0x99: ("STA", "mode_ABY_W", 5, False), 0x81: ("STA", "mode_INX", 6, False),
+    0x91: ("STA", "mode_INY_W", 6, False),
 
     # --- STX / STY ---
     0x86: ("STX", "mode_ZP",  3, False), 0x96: ("STX", "mode_ZPY", 4, False),
@@ -132,9 +132,9 @@ OPCODE_SPECS = {
     0x9A: ("TXS", "mode_IMP", 2, False), 0x98: ("TYA", "mode_IMP", 2, False),
 
     # --- Undocumented ---
-    0x9E: ("SHX", "mode_ABY", 5, False),
-    0x1B: ("SLO", "mode_ABY", 7, False),
-    0x3B: ("RLA", "mode_ABY", 7, False),
+    0x9E: ("SHX", "mode_ABY_W", 5, False),
+    0x1B: ("SLO", "mode_ABY_W", 7, False),
+    0x3B: ("RLA", "mode_ABY_W", 7, False),
 }
 
 
@@ -217,9 +217,9 @@ class InstructionsMixin:
         if condition:
             old_pc = self.PC
             self.PC = addr
-            self.extra_cycles += 1
+            self.bus.tick(1)
             if (old_pc & 0xFF00) != (self.PC & 0xFF00):
-                self.extra_cycles += 1
+                self.bus.tick(1)
 
     def BNE(self, addr): self._branch(self.flags['Z'] == 0, addr)
     def BEQ(self, addr): self._branch(self.flags['Z'] == 1, addr)
@@ -233,11 +233,13 @@ class InstructionsMixin:
     # --- Memory Inc/Dec ---
     def DEC(self, addr):
         val = (self.read(addr) - 1) & 0xFF
+        self.bus.tick(1)
         self.write(addr, val)
         self.update_zn(val)
 
     def INC(self, addr):
         val = (self.read(addr) + 1) & 0xFF
+        self.bus.tick(1)
         self.write(addr, val)
         self.update_zn(val)
 
@@ -256,6 +258,7 @@ class InstructionsMixin:
         self.push_byte(status)
 
     def PLP(self, addr):
+        self.bus.tick(1)
         status = self.pull_byte()
         self.flags['N'] = (status >> 7) & 1
         self.flags['V'] = (status >> 6) & 1
@@ -267,6 +270,7 @@ class InstructionsMixin:
     def PHA(self, addr): self.push_byte(self.A)
 
     def PLA(self, addr):
+        self.bus.tick(1)
         self.A = self.pull_byte()
         self.update_zn(self.A)
 
@@ -288,6 +292,7 @@ class InstructionsMixin:
 
     def JSR(self, addr):
         return_addr = (self.PC - 1) & 0xFFFF
+        self.bus.tick(1)
         self.push_byte((return_addr >> 8) & 0xFF)
         self.push_byte(return_addr & 0xFF)
         self.PC = addr
@@ -295,6 +300,7 @@ class InstructionsMixin:
     def RTS(self, addr):
         low = self.pull_byte()
         high = self.pull_byte()
+        self.bus.tick(2)
         self.PC = (((high << 8) | low) + 1) & 0xFFFF
 
     # --- Shifts & Rotates ---
@@ -306,6 +312,7 @@ class InstructionsMixin:
         if addr is None:
             self.A = result
         else:
+            self.bus.tick(1)
             self.write(addr, result)
 
     def LSR(self, addr):
@@ -316,6 +323,7 @@ class InstructionsMixin:
         if addr is None:
             self.A = result
         else:
+            self.bus.tick(1)
             self.write(addr, result)
 
     def ROL(self, addr):
@@ -326,6 +334,7 @@ class InstructionsMixin:
         if addr is None:
             self.A = result
         else:
+            self.bus.tick(1)
             self.write(addr, result)
         self.update_zn(result)
 
@@ -337,6 +346,7 @@ class InstructionsMixin:
         if addr is None:
             self.A = result
         else:
+            self.bus.tick(1)
             self.write(addr, result)
         self.update_zn(result)
 
@@ -449,3 +459,25 @@ class InstructionsMixin:
         self.write(addr, val)
         self.A &= val
         self.update_zn(self.A)
+
+    def mode_ABX_W(self):
+        low = self.fetch_byte()
+        high = self.fetch_byte()
+        base = (high << 8) | low
+        self.bus.tick(1)
+        return (base + self.X) & 0xFFFF
+
+    def mode_ABY_W(self):
+        low = self.fetch_byte()
+        high = self.fetch_byte()
+        base = (high << 8) | low
+        self.bus.tick(1)
+        return (base + self.Y) & 0xFFFF
+
+    def mode_INY_W(self):
+        zp = self.fetch_byte()
+        low = self.read(zp)
+        high = self.read((zp + 1) & 0xFF)
+        base = (high << 8) | low
+        self.bus.tick(1)
+        return (base + self.Y) & 0xFFFF

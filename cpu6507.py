@@ -54,9 +54,6 @@ class CPU6507(AddressingMixin, InstructionsMixin):
         if len(self._hist) > 25:
             self._hist.pop(0)
 
-        self.extra_cycles = 0
-        self._page_crossed = False
-
         opcode = self.fetch_byte()
         if opcode not in self.opcodes:
             for h in self._hist:
@@ -65,14 +62,6 @@ class CPU6507(AddressingMixin, InstructionsMixin):
 
         instruction, mode, cycles, page_penalty = self.opcodes[opcode]
         target_addr = mode()
-        if self._page_crossed and page_penalty:
-            self.extra_cycles += 1
-
         instruction(target_addr)
-
-        expected_cycles = cycles + self.extra_cycles
-        remaining = expected_cycles - self.bus.cycles_this_step
-        if remaining > 0:
-            self.bus.tick(remaining)
-
-        return max(expected_cycles, self.bus.cycles_this_step)
+    
+        return self.bus.cycles_this_step

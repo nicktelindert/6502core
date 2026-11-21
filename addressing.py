@@ -1,8 +1,10 @@
 class AddressingMixin:
     def mode_ACC(self):
+        self.bus.tick(1)
         return None
 
     def mode_IMP(self):
+        self.bus.tick(1)
         return None
 
     def mode_IMM(self):
@@ -14,10 +16,14 @@ class AddressingMixin:
         return self.fetch_byte()
 
     def mode_ZPX(self):
-        return (self.fetch_byte() + self.X) & 0xFF
+        zp = self.fetch_byte()
+        self.bus.tick(1)
+        return (zp + self.X) & 0xFF
 
     def mode_ZPY(self):
-        return (self.fetch_byte() + self.Y) & 0xFF
+        zp = self.fetch_byte()
+        self.bus.tick(1)
+        return (zp + self.Y) & 0xFF
 
     def mode_ABS(self):
         low = self.fetch_byte()
@@ -49,9 +55,10 @@ class AddressingMixin:
         return (self.PC + offset) & 0xFFFF
 
     def mode_INX(self):
-        zp_addr = (self.fetch_byte() + self.X) & 0xFF
-        low = self.read(zp_addr)
-        high = self.read((zp_addr + 1) & 0xFF)
+        zp = (self.fetch_byte() + self.X) & 0xFF
+        self.bus.tick(1)
+        low = self.read(zp)
+        high = self.read((zp + 1) & 0xFF)
         return (high << 8) | low
 
     def mode_INY(self):
