@@ -22,12 +22,15 @@ class TIA:
 
     def __init__(self):
         # Bovenaan in TIA.__init__:
+        self._pf_pending = []  # lijst van (target_clock, reg, val)
         self.audio = TIAAudio()
         self._audio_mid_done = False
         self.audio._resample_acc = 0.0
         self._frame_p0_top_y = None
         self.debug_p0_x = 0
         self.debug_p1_x = 0
+        self.debug_bl_x = 0
+
         self._logged_fall_trigger = False
         self._last_logged_p0_x = None
         # Sync & Control
@@ -183,19 +186,19 @@ class TIA:
         elif reg == 0x0F:  # PF2
             self.pf2 = v
         elif reg == 0x10:  # RESP0
-            self.p0_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
+            self.p0_x = ((self.clock - 68) + 8) % 160 if self.clock >= 68 else 3
             if self.resmp0:
-                self.m0_x = (self.p0_x + 5) % 160
+                self.m0_x = (self.p0_x + 4) % 160
         elif reg == 0x11:  # RESP1
-            self.p1_x = ((self.clock - 68) + 5) % 160 if self.clock >= 68 else 3
+            self.p1_x = ((self.clock - 68) + 8) % 160 if self.clock >= 68 else 3
             if self.resmp1:
-                self.m1_x = (self.p1_x + 5) % 160
+                self.m1_x = (self.p1_x + 4) % 160
         elif reg == 0x12:  # RESM0
-            self.m0_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
+            self.m0_x = ((self.clock - 68) + 7) % 160 if self.clock >= 68 else 2
         elif reg == 0x13:  # RESM1
-            self.m1_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
+            self.m1_x = ((self.clock - 68) + 7) % 160 if self.clock >= 68 else 2
         elif reg == 0x14:  # RESBL
-            self.bl_x = ((self.clock - 68) + 4) % 160 if self.clock >= 68 else 2
+            self.bl_x = ((self.clock - 68) + 7) % 160 if self.clock >= 68 else 2
         elif reg == 0x1B:  # GRP0
             self.grp0 = v
             self.grp1_old = self.grp1

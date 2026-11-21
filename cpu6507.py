@@ -281,7 +281,6 @@ class CPU6507:
                     self.current_bank = 1
             return
         if (addr & 0x0080) == 0:
-            self._flush_tia()
             self.tia.write(addr & 0x3F, v)
         elif (addr & 0x0200) == 0:
             self.memory[0x0080 | (addr & 0x7F)] = v
@@ -768,8 +767,13 @@ class CPU6507:
                 print(f"PC={hex(h[0])} OP={hex(h[1])} A={hex(h[2])} X={hex(h[3])} Y={hex(h[4])} SP={hex(h[5])}")
             raise NotImplementedError(f"Onbekende opcode: {hex(opcode)} op {hex(self.PC - 1)}")
 
+
         instruction, mode, cycles = self.opcodes[opcode]
         target_addr = mode()
+        if self._page_crossed and instruction in (
+            self.ADC, self.AND, self.CMP, self.EOR, self.LDA, self.LDX, self.LDY, self.ORA, self.SBC
+        ):
+            self.extra_cycles += 1
 
         # 1. Flush de base cycles minus de laatste cycle vóór de instructie:
         base_flush = max(0, (cycles - 1) * 3)
