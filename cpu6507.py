@@ -50,14 +50,9 @@ class CPU6507(AddressingMixin, InstructionsMixin):
 
     def step(self):
         self.bus.cycles_this_step = 0
-        self._hist.append((self.PC, self.A, self.X, self.Y, self.SP))
-        if len(self._hist) > 25:
-            self._hist.pop(0)
-
+   
         opcode = self.fetch_byte()
         if opcode not in self.opcodes:
-            for h in self._hist:
-                print(f"PC={hex(h[0])} A={hex(h[1])} X={hex(h[2])} Y={hex(h[3])} SP={hex(h[4])}")
             raise NotImplementedError(f"Onbekende opcode: {hex(opcode)} op {hex(self.PC - 1)}")
 
         instruction, mode, cycles, page_penalty = self.opcodes[opcode]
