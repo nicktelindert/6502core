@@ -5,7 +5,7 @@ import zlib
 
 class Cartridge:  
     def __init__(self, rom_data: bytes, name: str = "Unknown"):
-        self.name = name
+        self.name = f"{name} {hex(zlib.crc32(rom_data) & 0xFFFFFFFF)}"
 
     def read(self, address: int) -> int:
         raise NotImplementedError
@@ -92,8 +92,8 @@ class CartridgeF6SC(CartridgeF6):
             return
         super().write(addr, value)
 
-# Bekende CRC32 hashes voor 16K Superchip (F6SC) ROMs (o.a. Dig Dug NTSC & PAL)
 F6SC_CRC32 = {
+    0xee7b80d1, #Another Dig Dug (USA)
     0xB629D904,  # Dig Dug (USA)
     0xD352052E,  # Dig Dug (Europe)
     0x5A27B58C,  # Dig Dug (Rev 1)
