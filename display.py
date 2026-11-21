@@ -75,7 +75,7 @@ class Display:
             self._draw_rom_menu()
 
         pygame.display.flip()
-        self.clock.tick(0)
+        self.clock.tick(60)
     
         return True, chosen_rom
 

@@ -34,11 +34,11 @@ Een cycle-accurate Atari 2600 (VCS) emulator geschreven in Python met Pygame, ge
 | **ESC** | Afsluiten |
 
 ## BUGS
-- Het geluid is nog een beetje om te janken, maar heb er een basis in zitten
-- Rare glitches met Frogger
+- De performance moet beter(als dit mogelijk is met python?)
+- Audio hapert soms iets
+- Stargate laadt wel maar werkt nog niet correct
 
 ## Roadmap
 
-- [ ] Audio-output balanceren en resampling vloeiender maken
 - [ ] Stargate ondersteunen
 - [ ] App Image releasen
