@@ -2,3 +2,5 @@ __pycache__/
 *.a26
 .venv
 *.bin
+atari2600
+atari2600_dbg

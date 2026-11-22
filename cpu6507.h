@@ -1,0 +1,57 @@
+#ifndef CPU6507_H
+#define CPU6507_H
+#ifndef ADDR_NONE
+#define ADDR_NONE 0xFFFFu
+#endif
+
+#include <stdint.h>
+#include <stdbool.h>
+
+typedef struct Bus Bus;
+typedef struct CPU6507 CPU6507;
+
+enum {
+    CPU_FLAG_C = 1u << 0, /* 0x01 Carry */
+    CPU_FLAG_Z = 1u << 1, /* 0x02 Zero */
+    CPU_FLAG_I = 1u << 2, /* 0x04 Interrupt Disable */
+    CPU_FLAG_D = 1u << 3, /* 0x08 Decimal */
+    CPU_FLAG_B = 1u << 4, /* 0x10 Break */
+    CPU_FLAG_U = 1u << 5, /* 0x20 Unused (meestal 1 bij pushes) */
+    CPU_FLAG_V = 1u << 6, /* 0x40 Overflow */
+    CPU_FLAG_N = 1u << 7  /* 0x80 Negative */
+};
+
+typedef uint16_t (*AddrModeFn)(CPU6507 *cpu);
+typedef void (*InstrFn)(CPU6507 *cpu, uint16_t addr);
+
+typedef struct {
+    InstrFn exec;
+    AddrModeFn mode;
+    uint8_t base_cycles;
+    bool page_penalty;
+} OpcodeEntry;
+
+struct CPU6507 {
+    Bus *bus;
+
+    uint8_t A;
+    uint8_t X;
+    uint8_t Y;
+    uint8_t SP;
+    uint16_t PC;
+    uint8_t status;
+
+    int extra_cycles;
+    bool page_crossed;
+
+    uint16_t hist[256];
+    uint8_t hist_idx;
+
+    OpcodeEntry opcodes[256];
+};
+
+void cpu_init(CPU6507 *cpu, Bus *bus);
+void cpu_reset(CPU6507 *cpu);
+int cpu_step(CPU6507 *cpu);
+
+#endif /* CPU6507_H */

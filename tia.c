@@ -1,0 +1,610 @@
+#include "tia.h"
+#include "audio.h"
+#include <string.h>
+
+/* Optionele audio-hooks (koppel aan jouw TIAAudio in C) */
+extern void tia_audio_tick_half_scanline(TIAAudio *audio);
+extern void tia_audio_flush_frame(TIAAudio *audio);
+
+static const uint8_t NTSC_HUES[16][3] = {
+    {0, 0, 0},       /* 0: Zwart / grijs */
+    {212, 168, 32},  /* 1: Goud / geel */
+    {212, 128, 24},  /* 2: Oranje-geel */
+    {198, 88, 24},   /* 3: Oranje */
+    {184, 56, 48},   /* 4: Rood-oranje */
+    {168, 40, 96},   /* 5: Paars-rood */
+    {128, 44, 148},  /* 6: Paars */
+    {84, 56, 176},   /* 7: Indigo / blauw-paars */
+    {48, 80, 196},   /* 8: Blauw */
+    {32, 112, 188},  /* 9: Helder blauw */
+    {24, 136, 152},  /* A: Cyaan / groenblauw */
+    {32, 148, 96},   /* B: Zeegroen */
+    {48, 152, 48},   /* C: Groen */
+    {96, 144, 32},   /* D: Geelgroen / olijf */
+    {144, 128, 24},  /* E: Licht olijf / zand */
+    {184, 108, 24}   /* F: Warm bruin / oker */
+};
+
+static bool is_delayed_reg(uint8_t reg) {
+    switch (reg) {
+        case 0x0Du: case 0x0Eu: case 0x0Fu:
+        case 0x1Bu: case 0x1Cu: case 0x1Fu:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool is_non_visual_reg(uint8_t reg) {
+    switch (reg) {
+        case 0x02u: case 0x03u:
+        case 0x15u: case 0x16u: case 0x17u: case 0x18u: case 0x19u: case 0x1Au:
+        case 0x20u: case 0x21u: case 0x22u: case 0x23u: case 0x24u: case 0x2Bu:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static int mod_160(int val) {
+    int r = val % 160;
+    return r < 0 ? r + 160 : r;
+}
+
+static int hm_offset(uint8_t reg_val) {
+    int raw = (reg_val >> 4) & 0x0F;
+    int signed_val = (raw >= 8) ? (raw - 16) : raw;
+    return -signed_val;
+}
+
+static NusizLayout get_nusiz_layout(uint8_t nusiz) {
+    uint8_t mode = nusiz & 0x07u;
+    switch (mode) {
+        case 1u: return (NusizLayout){1, {0, 16, 0}, 2};
+        case 2u: return (NusizLayout){1, {0, 32, 0}, 2};
+        case 3u: return (NusizLayout){1, {0, 16, 32}, 3};
+        case 4u: return (NusizLayout){1, {0, 64, 0}, 2};
+        case 5u: return (NusizLayout){2, {0, 0, 0}, 1};
+        case 6u: return (NusizLayout){1, {0, 32, 64}, 3};
+        case 7u: return (NusizLayout){4, {0, 0, 0}, 1};
+        default: return (NusizLayout){1, {0, 0, 0}, 1};
+    }
+}
+
+static void compute_ntsc_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
+    int hue = (color_byte >> 4) & 0x0F;
+    int lum = (color_byte >> 1) & 0x07;
+    int br = NTSC_HUES[hue][0];
+    int bg = NTSC_HUES[hue][1];
+    int bb = NTSC_HUES[hue][2];
+
+    if (hue == 0) {
+        uint8_t g = (uint8_t)(lum * 32);
+        out_rgb[0] = g;
+        out_rgb[1] = g;
+        out_rgb[2] = g;
+        return;
+    }
+
+    double scale = (double)(lum + 1) / 5.0;
+    int r = (int)(br * scale);
+    int g = (int)(bg * scale);
+    int b = (int)(bb * scale);
+    out_rgb[0] = (uint8_t)(r > 255 ? 255 : (r < 0 ? 0 : r));
+    out_rgb[1] = (uint8_t)(g > 255 ? 255 : (g < 0 ? 0 : g));
+    out_rgb[2] = (uint8_t)(b > 255 ? 255 : (b < 0 ? 0 : b));
+}
+
+void tia_init(TIA *tia, TIAAudio *audio) {
+    memset(tia, 0, sizeof(*tia));
+    tia->audio = audio;
+    tia->frame_p0_top_y = -1;
+    tia->inpt4 = 0x80u;
+    tia->inpt5 = 0x80u;
+    tia->width = TIA_FB_WIDTH;
+    tia->height = TIA_FB_HEIGHT;
+
+    for (int c = 0; c < 256; c++) {
+        compute_ntsc_rgb((uint8_t)c, tia->ntsc_lut[c]);
+    }
+}
+
+uint8_t tia_read(TIA *tia, uint16_t addr) {
+    uint8_t reg = (uint8_t)(addr & 0x0Fu);
+    switch (reg) {
+        case 0x00u: return tia->cxm0p;
+        case 0x01u: return tia->cxm1p;
+        case 0x02u: return tia->cxp0fb;
+        case 0x03u: return tia->cxp1fb;
+        case 0x04u: return tia->cxm0fb;
+        case 0x05u: return tia->cxm1fb;
+        case 0x06u: return tia->cxblpf;
+        case 0x07u: return tia->cxppmm;
+        case 0x0Cu: return tia->inpt4;
+        case 0x0Du: return tia->inpt5;
+        default:    return 0;
+    }
+}
+
+void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
+    uint8_t reg = (uint8_t)(addr & 0x3Fu);
+    uint8_t v = val;
+
+    if (is_delayed_reg(reg)) {
+        tia_render_up_to_clock(tia, tia->clock >= 226 ? 228 : tia->clock + 2);
+    } else if (!is_non_visual_reg(reg)) {
+        tia_render_up_to_clock(tia, tia->clock);
+    }
+
+    switch (reg) {
+        case 0x00u: /* VSYNC */
+            if ((v & 0x02u) && !(tia->vsync & 0x02u)) {
+                if (tia->scanline >= 200) {
+                    tia->frame_ready = true;
+                    if (tia->audio) {
+                        tia_audio_flush_frame(tia->audio);
+                    }
+                }
+                tia->scanline = 0;
+            }
+            tia->vsync = v;
+            break;
+        case 0x01u: /* VBLANK */
+            tia->vblank = v;
+            break;
+        case 0x02u: /* WSYNC */
+            if (tia->clock != 0) {
+                tia->wsync = true;
+            }
+            break;
+        case 0x04u: /* NUSIZ0 */
+            tia->nusiz0 = v;
+            break;
+        case 0x05u: /* NUSIZ1 */
+            tia->nusiz1 = v;
+            break;
+        case 0x06u: /* COLUP0 */
+            tia->colup0 = v;
+            break;
+        case 0x07u: /* COLUP1 */
+            tia->colup1 = v;
+            break;
+        case 0x08u: /* COLUPF */
+            tia->colupf = v;
+            break;
+        case 0x09u: /* COLUBK */
+            tia->colubk = v;
+            break;
+        case 0x0Au: /* CTRLPF */
+            tia->ctrlpf = v;
+            break;
+        case 0x0Bu: /* REFP0 */
+            tia->refp0 = v;
+            break;
+        case 0x0Cu: /* REFP1 */
+            tia->refp1 = v;
+            break;
+        case 0x0Du: /* PF0 */
+            tia->pf0 = v;
+            break;
+        case 0x0Eu: /* PF1 */
+            tia->pf1 = v;
+            break;
+        case 0x0Fu: /* PF2 */
+            tia->pf2 = v;
+            break;
+        case 0x10u: { /* RESP0 */
+            NusizLayout lay = get_nusiz_layout(tia->nusiz0);
+            int wide_delay = (lay.scale > 1) ? 1 : 0;
+            tia->p0_x = (tia->clock >= 68) ? mod_160((tia->clock - 68) + 5 + wide_delay) : (3 + wide_delay);
+            if (tia->resmp0) {
+                tia->m0_x = mod_160(tia->p0_x + 4 * lay.scale);
+            }
+            break;
+        }
+        case 0x11u: { /* RESP1 */
+            NusizLayout lay = get_nusiz_layout(tia->nusiz1);
+            int wide_delay = (lay.scale > 1) ? 1 : 0;
+            tia->p1_x = (tia->clock >= 68) ? mod_160((tia->clock - 68) + 5 + wide_delay) : (3 + wide_delay);
+            if (tia->resmp1) {
+                tia->m1_x = mod_160(tia->p1_x + 4 * lay.scale);
+            }
+            break;
+        }
+        case 0x12u: /* RESM0 */
+            tia->m0_x = (tia->clock >= 68) ? mod_160((tia->clock - 68) + 4) : 2;
+            break;
+        case 0x13u: /* RESM1 */
+            tia->m1_x = (tia->clock >= 68) ? mod_160((tia->clock - 68) + 4) : 2;
+            break;
+        case 0x14u: /* RESBL */
+            tia->bl_x = (tia->clock >= 68) ? mod_160((tia->clock - 68) + 4) : 2;
+            break;
+        case 0x1Bu: /* GRP0 */
+            tia->grp0 = v;
+            tia->grp1_old = tia->grp1;
+            break;
+        case 0x1Cu: /* GRP1 */
+            tia->grp1 = v;
+            tia->grp0_old = tia->grp0;
+            tia->enabl_old = tia->enabl;
+            break;
+        case 0x1Du: /* ENAM0 */
+            tia->enam0 = v;
+            break;
+        case 0x1Eu: /* ENAM1 */
+            tia->enam1 = v;
+            break;
+        case 0x1Fu: /* ENABL */
+            tia->enabl = v;
+            break;
+        case 0x20u: /* HMP0 */
+            tia->hmp0 = v;
+            break;
+        case 0x21u: /* HMP1 */
+            tia->hmp1 = v;
+            break;
+        case 0x22u: /* HMM0 */
+            tia->hmm0 = v;
+            break;
+        case 0x23u: /* HMM1 */
+            tia->hmm1 = v;
+            break;
+        case 0x24u: /* HMBL */
+            tia->hmbl = v;
+            break;
+        case 0x25u: /* VDELP0 */
+            tia->vdelp0 = (uint8_t)(v & 0x01u);
+            break;
+        case 0x26u: /* VDELP1 */
+            tia->vdelp1 = (uint8_t)(v & 0x01u);
+            break;
+        case 0x27u: /* VDELBL */
+            tia->vdelbl = (uint8_t)(v & 0x01u);
+            break;
+        case 0x28u: { /* RESMP0 */
+            NusizLayout lay = get_nusiz_layout(tia->nusiz0);
+            if (tia->resmp0 || (v & 0x02u)) {
+                tia->m0_x = mod_160(tia->p0_x + 4 * lay.scale);
+            }
+            tia->resmp0 = (uint8_t)(v & 0x02u);
+            break;
+        }
+        case 0x29u: { /* RESMP1 */
+            NusizLayout lay = get_nusiz_layout(tia->nusiz1);
+            if (tia->resmp1 || (v & 0x02u)) {
+                tia->m1_x = mod_160(tia->p1_x + 4 * lay.scale);
+            }
+            tia->resmp1 = (uint8_t)(v & 0x02u);
+            break;
+        }
+        case 0x2Au: { /* HMOVE */
+            NusizLayout lay0 = get_nusiz_layout(tia->nusiz0);
+            NusizLayout lay1 = get_nusiz_layout(tia->nusiz1);
+            tia->p0_x = mod_160(tia->p0_x + hm_offset(tia->hmp0));
+            tia->p1_x = mod_160(tia->p1_x + hm_offset(tia->hmp1));
+            if (tia->resmp0) {
+                tia->m0_x = mod_160(tia->p0_x + 4 * lay0.scale);
+            } else {
+                tia->m0_x = mod_160(tia->m0_x + hm_offset(tia->hmm0));
+            }
+            if (tia->resmp1) {
+                tia->m1_x = mod_160(tia->p1_x + 4 * lay1.scale);
+            } else {
+                tia->m1_x = mod_160(tia->m1_x + hm_offset(tia->hmm1));
+            }
+            tia->bl_x = mod_160(tia->bl_x + hm_offset(tia->hmbl));
+            break;
+        }
+        case 0x2Bu: /* HMCLR */
+            tia->hmp0 = 0;
+            tia->hmp1 = 0;
+            tia->hmm0 = 0;
+            tia->hmm1 = 0;
+            tia->hmbl = 0;
+            break;
+        case 0x2Cu: /* CXCLR */
+            tia->cxm0p = 0;
+            tia->cxm1p = 0;
+            tia->cxp0fb = 0;
+            tia->cxp1fb = 0;
+            tia->cxm0fb = 0;
+            tia->cxm1fb = 0;
+            tia->cxblpf = 0;
+            tia->cxppmm = 0;
+            break;
+        case 0x15u: if (tia->audio) tia->audio->audc[0] = (uint8_t)(v & 0x0Fu); break;
+        case 0x16u: if (tia->audio) tia->audio->audc[1] = (uint8_t)(v & 0x0Fu); break;
+        case 0x17u: if (tia->audio) tia->audio->audf[0] = (uint8_t)(v & 0x1Fu); break;
+        case 0x18u: if (tia->audio) tia->audio->audf[1] = (uint8_t)(v & 0x1Fu); break;
+        case 0x19u: if (tia->audio) tia->audio->audv[0] = (uint8_t)(v & 0x0Fu); break;
+        case 0x1Au: if (tia->audio) tia->audio->audv[1] = (uint8_t)(v & 0x0Fu); break;    
+        default:
+            break;
+    }
+}
+
+void tia_render_up_to_clock(TIA *tia, int target_clock) {
+    int y = tia->scanline - 40;
+    if (!(0 <= y && y < tia->height)) {
+        tia->rendered_clock = target_clock;
+        return;
+    }
+
+    int start = (tia->rendered_clock > 68) ? tia->rendered_clock : 68;
+    int end = (target_clock < 228) ? target_clock : 228;
+    if (y == 0 && start <= 68) {
+        tia->frame_p0_top_y = -1;
+    }
+    if (start >= end) {
+        tia->rendered_clock = target_clock;
+        return;
+    }
+
+    uint8_t *fb = tia->framebuffer;
+    int row_offset = y * 480; /* 160 * 3 */
+    int x_start = start - 68;
+    int x_end = end - 68;
+
+    if (tia->vblank & 0x02u) {
+        int s_idx = row_offset + x_start * 3;
+        int e_idx = row_offset + x_end * 3;
+        memset(&fb[s_idx], 0, (size_t)(e_idx - s_idx));
+        tia->rendered_clock = target_clock;
+        return;
+    }
+
+    uint8_t active_grp0 = tia->vdelp0 ? tia->grp0_old : tia->grp0;
+    uint8_t active_grp1 = tia->vdelp1 ? tia->grp1_old : tia->grp1;
+    uint8_t active_enabl = tia->vdelbl ? tia->enabl_old : tia->enabl;
+
+    bool m0_en = ((tia->enam0 & 0x02u) != 0) && !tia->resmp0;
+    bool m1_en = ((tia->enam1 & 0x02u) != 0) && !tia->resmp1;
+    bool bl_en = (active_enabl & 0x02u) != 0;
+
+    uint8_t pf0 = tia->pf0;
+    uint8_t pf1 = tia->pf1;
+    uint8_t pf2 = tia->pf2;
+    bool has_pf = (pf0 | pf1 | pf2) != 0;
+
+    uint8_t colup0 = tia->colup0;
+    uint8_t colup1 = tia->colup1;
+    uint8_t colupf = tia->colupf;
+    uint8_t colubk = tia->colubk;
+
+    if (!active_grp0 && !active_grp1 && !m0_en && !m1_en && !bl_en && !has_pf) {
+        const uint8_t *bg = tia->ntsc_lut[colubk];
+        int idx = row_offset + x_start * 3;
+        for (int x = x_start; x < x_end; x++) {
+            fb[idx]     = bg[0];
+            fb[idx + 1] = bg[1];
+            fb[idx + 2] = bg[2];
+            idx += 3;
+        }
+        if (target_clock > tia->rendered_clock) {
+            tia->rendered_clock = target_clock;
+        }
+        return;
+    }
+
+    NusizLayout lay0 = get_nusiz_layout(tia->nusiz0);
+    NusizLayout lay1 = get_nusiz_layout(tia->nusiz1);
+
+    int p0_scale = lay0.scale;
+    int p1_scale = lay1.scale;
+    int p0_w = 8 * p0_scale;
+    int p1_w = 8 * p1_scale;
+    bool refp0 = (tia->refp0 & 0x08u) != 0;
+    bool refp1 = (tia->refp1 & 0x08u) != 0;
+
+    int m0_w = 1 << ((tia->nusiz0 >> 4) & 0x03);
+    int m1_w = 1 << ((tia->nusiz1 >> 4) & 0x03);
+    int bl_w = 1 << ((tia->ctrlpf >> 4) & 0x03);
+
+    bool pf_ref = (tia->ctrlpf & 0x01u) != 0;
+    bool pf_score = ((tia->ctrlpf & 0x02u) != 0) && ((tia->ctrlpf & 0x04u) == 0);
+    bool pf_prio = (tia->ctrlpf & 0x04u) != 0;
+
+    int p0_x = tia->p0_x;
+    int p1_x = tia->p1_x;
+    int m0_x = tia->m0_x;
+    int m1_x = tia->m1_x;
+    int bl_x = tia->bl_x;
+
+    uint8_t pf_bits[40];
+    memset(pf_bits, 0, sizeof(pf_bits));
+    if (has_pf) {
+        for (int i = 0; i < 4; i++) {
+            if ((pf0 >> (4 + i)) & 1) pf_bits[i] = 1;
+        }
+        for (int i = 0; i < 8; i++) {
+            if ((pf1 >> (7 - i)) & 1) pf_bits[4 + i] = 1;
+        }
+        for (int i = 0; i < 8; i++) {
+            if ((pf2 >> i) & 1) pf_bits[12 + i] = 1;
+        }
+        if (pf_ref) {
+            for (int i = 0; i < 20; i++) pf_bits[39 - i] = pf_bits[i];
+        } else {
+            for (int i = 0; i < 20; i++) pf_bits[20 + i] = pf_bits[i];
+        }
+    }
+
+    uint8_t cxm0p = tia->cxm0p;
+    uint8_t cxm1p = tia->cxm1p;
+    uint8_t cxp0fb = tia->cxp0fb;
+    uint8_t cxp1fb = tia->cxp1fb;
+    uint8_t cxm0fb = tia->cxm0fb;
+    uint8_t cxm1fb = tia->cxm1fb;
+    uint8_t cxblpf = tia->cxblpf;
+    uint8_t cxppmm = tia->cxppmm;
+    int p0_top_y = tia->frame_p0_top_y;
+
+    int idx = row_offset + x_start * 3;
+    for (int x = x_start; x < x_end; x++) {
+        bool p0_on = false;
+        if (active_grp0) {
+            for (int k = 0; k < lay0.num_offsets; k++) {
+                int dx = x - (p0_x + lay0.offsets[k]);
+                if (0 <= dx && dx < p0_w) {
+                    int px = dx / p0_scale;
+                    int bit = refp0 ? px : (7 - px);
+                    if ((active_grp0 >> bit) & 1) {
+                        p0_on = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        bool p1_on = false;
+        if (active_grp1) {
+            for (int k = 0; k < lay1.num_offsets; k++) {
+                int dx = x - (p1_x + lay1.offsets[k]);
+                if (0 <= dx && dx < p1_w) {
+                    int px = dx / p1_scale;
+                    int bit = refp1 ? px : (7 - px);
+                    if ((active_grp1 >> bit) & 1) {
+                        p1_on = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        bool m0_on = false;
+        if (m0_en) {
+            for (int k = 0; k < lay0.num_offsets; k++) {
+                int dx = x - (m0_x + lay0.offsets[k]);
+                if (0 <= dx && dx < m0_w) {
+                    m0_on = true;
+                    break;
+                }
+            }
+        }
+
+        bool m1_on = false;
+        if (m1_en) {
+            for (int k = 0; k < lay1.num_offsets; k++) {
+                int dx = x - (m1_x + lay1.offsets[k]);
+                if (0 <= dx && dx < m1_w) {
+                    m1_on = true;
+                    break;
+                }
+            }
+        }
+
+        bool bl_on = bl_en && (0 <= (x - bl_x) && (x - bl_x) < bl_w);
+        bool pf_on = has_pf ? (pf_bits[x >> 2] != 0) : false;
+
+        if (p0_on && p0_top_y < 0) {
+            p0_top_y = y;
+        }
+
+        if (p0_on || p1_on || m0_on || m1_on || bl_on) {
+            if (m0_on) {
+                if (p1_on) cxm0p |= 0x80u;
+                if (p0_on) cxm0p |= 0x40u;
+                if (pf_on) cxm0fb |= 0x80u;
+                if (bl_on) cxm0fb |= 0x40u;
+                if (m1_on) cxppmm |= 0x40u;
+            }
+            if (m1_on) {
+                if (p0_on) cxm1p |= 0x80u;
+                if (p1_on) cxm1p |= 0x40u;
+                if (pf_on) cxm1fb |= 0x80u;
+                if (bl_on) cxm1fb |= 0x40u;
+            }
+            if (p0_on) {
+                if (pf_on) cxp0fb |= 0x80u;
+                if (bl_on) cxp0fb |= 0x40u;
+                if (p1_on) cxppmm |= 0x80u;
+            }
+            if (p1_on) {
+                if (pf_on) cxp1fb |= 0x80u;
+                if (bl_on) cxp1fb |= 0x40u;
+            }
+            if (bl_on && pf_on) {
+                cxblpf |= 0x80u;
+            }
+        }
+
+        uint8_t pfc = pf_score ? ((x < 80) ? colup0 : colup1) : colupf;
+        uint8_t c;
+        if (pf_prio) {
+            if (pf_on || bl_on) c = pfc;
+            else if (p0_on || m0_on) c = colup0;
+            else if (p1_on || m1_on) c = colup1;
+            else c = colubk;
+        } else {
+            if (p0_on || m0_on) c = colup0;
+            else if (p1_on || m1_on) c = colup1;
+            else if (pf_on || bl_on) c = pfc;
+            else c = colubk;
+        }
+
+        const uint8_t *rgb = tia->ntsc_lut[c];
+        fb[idx]     = rgb[0];
+        fb[idx + 1] = rgb[1];
+        fb[idx + 2] = rgb[2];
+        idx += 3;
+    }
+
+    tia->frame_p0_top_y = p0_top_y;
+    tia->cxm0p = cxm0p;
+    tia->cxm1p = cxm1p;
+    tia->cxp0fb = cxp0fb;
+    tia->cxp1fb = cxp1fb;
+    tia->cxm0fb = cxm0fb;
+    tia->cxm1fb = cxm1fb;
+    tia->cxblpf = cxblpf;
+    tia->cxppmm = cxppmm;
+    if (target_clock > tia->rendered_clock) {
+        tia->rendered_clock = target_clock;
+    }
+}
+
+void tia_step(TIA *tia, int color_clocks) {
+    tia->clock += color_clocks;
+    tia->audio_clock += color_clocks;
+
+    if (tia->clock + color_clocks < 68) {
+        return;
+    }
+
+    if (40 <= tia->scanline && tia->scanline <= 190) {
+        if (tia->grp0 != 0) {
+            tia->debug_p0_x = tia->p0_x;
+        }
+        if (tia->grp1 != 0) {
+            tia->debug_p1_x = tia->p1_x;
+        }
+    }
+
+    while (tia->audio_clock >= 114) {
+        tia->audio_clock -= 114;
+        if (tia->audio) {
+            tia_audio_tick_half_scanline(tia->audio);
+        }
+    }
+
+    while (tia->clock >= 228) {
+        tia_render_up_to_clock(tia, 228);
+        if (tia->wsync) {
+            tia->clock = 0;
+            tia->wsync = false;
+        } else {
+            tia->clock -= 228;
+        }
+        tia->rendered_clock = 0;
+        tia->scanline += 1;
+        if (tia->scanline >= 262) {
+            tia->audio_mid_done = false;
+            tia->scanline = 0;
+            tia->frame_ready = true;
+            if (tia->audio) {
+                tia_audio_flush_frame(tia->audio);
+            }
+        }
+    }
+}
