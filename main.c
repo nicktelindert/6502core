@@ -448,6 +448,8 @@ int main(int argc, char **argv) {
     }
     while (running) {
         uint64_t frame_start = SDL_GetPerformanceCounter();
+        uint64_t now = SDL_GetPerformanceCounter();
+        
         SDL_Event ev;
 
         while (SDL_PollEvent(&ev)) {
@@ -526,12 +528,25 @@ int main(int argc, char **argv) {
             SDL_UpdateTexture(texture, NULL, blank, TIA_FB_WIDTH * 3);
         }
 
+        double frame_dt = (double)(now - frame_start) / (double)perf_freq;
+        static double accum_time = 0.0;
+        static int accum_frames = 0;
+        static double current_fps = 60.0;
+
+        accum_time += frame_dt;
+        accum_frames++;
+        if (accum_time >= 0.5) {
+            current_fps = (double)accum_frames / accum_time;
+            accum_time = 0.0;
+            accum_frames = 0;
+        }   
+
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
         SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
-        overlay_render(&overlay, renderer, win_w, win_h, 60.00);
+        overlay_render(&overlay, renderer, win_w, win_h, current_fps);
         SDL_RenderPresent(renderer);
-
+  
         uint64_t frame_end = SDL_GetPerformanceCounter();
         double elapsed_ms = ((double)(frame_end - frame_start) * 1000.0) / (double)perf_freq;
         if (elapsed_ms < target_frame_ms) {
