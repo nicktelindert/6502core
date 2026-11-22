@@ -460,7 +460,6 @@ int main(int argc, char **argv) {
     }
     while (running) {
         uint64_t frame_start = SDL_GetPerformanceCounter();
-        uint64_t now = SDL_GetPerformanceCounter();
         
         SDL_Event ev;
 
@@ -536,7 +535,8 @@ int main(int argc, char **argv) {
             memset(blank, 0x18, sizeof(blank));
             SDL_UpdateTexture(texture, NULL, blank, TIA_FB_WIDTH * 3);
         }
-
+       
+        uint64_t now = SDL_GetPerformanceCounter();
         double frame_dt = (double)(now - frame_start) / (double)perf_freq;
         static double accum_time = 0.0;
         static int accum_frames = 0;
