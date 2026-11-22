@@ -187,9 +187,11 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
         uint16_t vec0 = (uint16_t)(cart->banks[0][0xFFCu] | ((uint16_t)cart->banks[0][0xFFDu] << 8));
         cart->current_bank = (vec0 & 0x1000u) ? 0 : 1;
     } else if (cart->type == CART_TYPE_F6 || cart->type == CART_TYPE_F6SC) {
-        cart->current_bank = 0;
         for (int b = 0; b < 4; b++) {
             cart->banks[b] = &cart->rom_data[(size_t)b * 0x1000u];
+        }
+        cart->current_bank = 0;
+        for (int b = 0; b < 4; b++) {
             uint16_t vec = (uint16_t)(cart->banks[b][0xFFCu] | ((uint16_t)cart->banks[b][0xFFDu] << 8));
             if (vec & 0x1000u) {
                 cart->current_bank = b;
