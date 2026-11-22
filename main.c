@@ -459,17 +459,14 @@ int main(int argc, char **argv) {
                 if (overlay.show_rom_menu) {
                     if (key == SDLK_UP) {
                         if (overlay.rom_count > 0) {
-                            printf("UP/DOWN: count=%d idx=%d\n", overlay.rom_count, overlay.selected_rom_idx);
                             overlay.selected_rom_idx--;
                             if (overlay.selected_rom_idx < 0) {
                                 overlay.selected_rom_idx = overlay.rom_count - 1;
                             }
                         }
                     } else if (key == SDLK_DOWN) {
-                        printf("UP/DOWN: count=%d idx=%d\n", overlay.rom_count, overlay.selected_rom_idx);
                         if (overlay.rom_count > 0) {
                             overlay.selected_rom_idx = (overlay.selected_rom_idx +1) % overlay.rom_count;
-                            printf("UP/DOWN: count=%d idx=%d\n", overlay.rom_count, overlay.selected_rom_idx);
                         }
                     } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
                         if (overlay.rom_count > 0) {
