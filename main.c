@@ -440,11 +440,23 @@ int main(int argc, char **argv) {
     overlay.show_help = true;
     overlay.show_rom_menu = false;
     overlay.selected_rom_idx = 0;
-    
-    if (argc > 1) {
-        if (emu_load_rom(&emu, argv[1])) {
+    bool uncapped = false;
+
+    if (argc == 2) {
+        if (strcmp(argv[1], "--uncapped") == 0)  {           
+             uncapped = true;
+        } else {
+            emu_load_rom(&emu, argv[1]);
             overlay.show_rom_menu = false;
         }
+    } else if (argc == 3){
+        if (strcmp(argv[2], "--uncapped") == 0)  {
+            uncapped = true;
+        } else {
+            printf ("%s is not a valid argument", argv[2]);
+        }
+        emu_load_rom(&emu, argv[1]);
+        overlay.show_rom_menu = false;
     }
     while (running) {
         uint64_t frame_start = SDL_GetPerformanceCounter();
@@ -543,18 +555,20 @@ int main(int argc, char **argv) {
         SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
         overlay_render(&overlay, renderer, win_w, win_h, current_fps);
         SDL_RenderPresent(renderer);
-  
-        uint64_t frame_end = SDL_GetPerformanceCounter();
-        double elapsed_ms = ((double)(frame_end - frame_start) * 1000.0) / (double)perf_freq;
-        if (elapsed_ms < target_frame_ms) {
-            double remaining_ms = target_frame_ms - elapsed_ms;
-            if (remaining_ms > 2.0) {
-                SDL_Delay((uint32_t)(remaining_ms - 1.0));
+        if (!uncapped) {
+            uint64_t frame_end = SDL_GetPerformanceCounter();
+            double elapsed_ms = ((double)(frame_end - frame_start) * 1000.0) / (double)perf_freq;
+            if (elapsed_ms < target_frame_ms) {
+                double remaining_ms = target_frame_ms - elapsed_ms;
+                if (remaining_ms > 2.0) {
+                    SDL_Delay((uint32_t)(remaining_ms - 1.0));
+                }
+                while ((((double)(SDL_GetPerformanceCounter() - frame_start) * 1000.0) / (double)perf_freq) < target_frame_ms) {
+                    /* Fijnafstemming tot exact 16.67 ms */
+                }
             }
-            while ((((double)(SDL_GetPerformanceCounter() - frame_start) * 1000.0) / (double)perf_freq) < target_frame_ms) {
-                /* Fijnafstemming tot exact 16.67 ms */
-            }
-        }
+        }  
+
     }
 
     if (audio_dev > 0) {
