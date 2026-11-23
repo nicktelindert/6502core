@@ -10,10 +10,13 @@ static const uint32_t F6SC_CRC32_LIST[] = {
     0x5A27B58Cu  /* Dig Dug (Rev 1) */
 };
 
+
 static const uint32_t F8FE_CRC32_LIST[] = {
-    0xcde3530e, //Stargate
-    0xe127c012,
-    0x93217704
+    0xe127c012, // Robot Tank
+};
+
+static const uint32_t F8SC_CRC32_LIST[] = {
+    0xcde3530e
 };
 
 uint32_t cart_crc32(const uint8_t *data, size_t len) {
@@ -60,6 +63,39 @@ static bool is_f6sc(const uint8_t *rom_data, size_t size, uint32_t crc) {
     return false;
 }
 
+static bool is_f8sc(const uint8_t *rom_data, size_t size, uint32_t crc) {
+    if (size != 0x2000u) {
+        return false;
+    }
+
+    size_t num_known = sizeof(F8SC_CRC32_LIST) / sizeof(F8SC_CRC32_LIST[0]);
+    for (size_t i = 0; i < num_known; i++) {
+        if (crc == F8SC_CRC32_LIST[i]) {
+            return true;
+        }
+    }
+
+    for (int bank = 0; bank < 4; bank++) {
+        const uint8_t *page = &rom_data[(size_t)bank * 0x1000u];
+        uint8_t first = page[0];
+        if (first == 0x00u || first == 0xFFu) {
+            bool all_same = true;
+            for (int i = 1; i < 0x100; i++) {
+                if (page[i] != first) {
+                    all_same = false;
+                    break;
+                }
+            }
+            if (all_same) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+
 static uint8_t read_2k4k(Cartridge *cart, uint16_t address) {
     return cart->rom_data[address & cart->mask];
 }
@@ -79,14 +115,34 @@ static void check_hotspot_f8(Cartridge *cart, uint16_t address) {
     }
 }
 
+static void check_hotspot_f8SC(Cartridge *cart, uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr == 0x1FF8u) {
+        cart->current_bank = 0;
+    } else if (addr == 0x1FF9u) {
+        cart->current_bank = 1;
+    }
+}
+
+
 static uint8_t read_f8(Cartridge *cart, uint16_t address) {
-    check_hotspot_f8(cart, address);
+    if (cart->type == CART_TYPE_F8SC) {
+        check_hotspot_f8SC(cart,address);
+    } else {
+        check_hotspot_f8(cart, address);
+    }
+    
     return cart->banks[cart->current_bank][address & 0x0FFFu];
 }
 
 static void write_f8(Cartridge *cart, uint16_t address, uint8_t value) {
     (void)value;
-    check_hotspot_f8(cart, address);
+    if (cart->type == CART_TYPE_F8SC) {
+        check_hotspot_f8SC(cart,address);
+    } else {
+        check_hotspot_f8(cart, address);
+    }
+    
 }
 
 static void check_hotspot_f6(Cartridge *cart, uint16_t address) {
@@ -120,6 +176,23 @@ static uint8_t read_f6sc(Cartridge *cart, uint16_t address) {
     }
     return read_f6(cart, addr);
 }
+
+static uint8_t read_f8sc(Cartridge *cart, uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1080u && addr <= 0x10FFu) {
+        return cart->superchip_ram[addr & 0x007Fu];
+    }
+    return read_f8(cart, addr);
+}
+
+static void write_f8sc(Cartridge *cart, uint16_t address, uint8_t value)  {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1000u && addr <= 0x107Fu) {
+        cart->superchip_ram[addr & 0x007Fu] = value;
+    }
+    return write_f8(cart, addr, value);
+}
+
 
 static void write_f6sc(Cartridge *cart, uint16_t address, uint8_t value) {
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
@@ -195,7 +268,15 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
             cart->num_banks = 2;
             cart->read = read_fe;
             cart->write = write_fe;
-        } else {
+        } else if(is_f8sc(rom_data, size, cart->crc32)) {
+            cart->type = CART_TYPE_F8SC;
+            cart->num_banks = 2;
+            cart->has_superchip_ram = true;
+            cart->read = read_f8sc;
+            cart->write = write_f8sc;
+        }
+        
+        else {
             cart->type = CART_TYPE_F8;
             cart->num_banks = 2;
             cart->read = read_f8;
@@ -242,7 +323,7 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
         snprintf(cart->name, sizeof(cart->name), "%s 0x%08X", base_name, cart->crc32);
     }
 
-    if (cart->type == CART_TYPE_F8) {
+    if (cart->type == CART_TYPE_F8 || cart->type == CART_TYPE_F8SC) {
         cart->banks[0] = &cart->rom_data[0x0000u];
         cart->banks[1] = &cart->rom_data[0x1000u];
         uint16_t vec0 = (uint16_t)(cart->banks[0][0xFFCu] | ((uint16_t)cart->banks[0][0xFFDu] << 8));

@@ -10,7 +10,8 @@ typedef enum {
     CART_TYPE_F8,
     CART_TYPE_F6,
     CART_TYPE_F6SC,
-    CART_TYPE_FE
+    CART_TYPE_FE,
+    CART_TYPE_F8SC
 } CartType;
 
 typedef struct Cartridge Cartridge;
