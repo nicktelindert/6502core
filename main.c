@@ -469,6 +469,12 @@ int main(int argc, char **argv) {
             if (ev.type == SDL_KEYDOWN) {
                 SDL_Keycode key = ev.key.keysym.sym;
 
+
+                if (key == SDLK_F3 && uncapped == false) {
+                    uncapped = true;
+                } else if (key == SDLK_F3 && uncapped == true) {
+                    uncapped = false;
+                }
                 if (overlay.show_rom_menu) {
                     if (key == SDLK_UP) {
                         if (overlay.rom_count > 0) {
