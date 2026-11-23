@@ -9,7 +9,8 @@ typedef enum {
     CART_TYPE_2K4K = 0,
     CART_TYPE_F8,
     CART_TYPE_F6,
-    CART_TYPE_F6SC
+    CART_TYPE_F6SC,
+    CART_TYPE_FE
 } CartType;
 
 typedef struct Cartridge Cartridge;
@@ -44,4 +45,6 @@ void cart_free(Cartridge *cart);
 uint8_t cart_read(Cartridge *cart, uint16_t addr);
 void cart_write(Cartridge *cart, uint16_t addr, uint8_t val);
 
+void cart_fe_on_rts_hi(Cartridge *cart, uint8_t hi);
+void cart_fe_on_byte(Cartridge *cart, uint8_t val);
 #endif /* CARTRIDGE_H */

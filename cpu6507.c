@@ -1,13 +1,9 @@
 #include "cpu6507.h"
 #include "addressing.h"
 #include <stdio.h>
+#include "bus.h"
+#include "cartridge.h"
 
-/* Verwachte functies in jouw bus-laag */
-extern uint8_t bus_read(Bus *bus, uint16_t address);
-extern void bus_write(Bus *bus, uint16_t address, uint8_t value);
-extern void bus_tick(Bus *bus, int cycles);
-extern int bus_get_cycles_this_step(Bus *bus);
-extern void bus_reset_cycles_this_step(Bus *bus);
 
 /* --- Gedeelde helpers (ook gebruikt door addressing.c) --- */
 
@@ -178,6 +174,9 @@ static void instr_JSR(CPU6507 *cpu, uint16_t addr) {
     bus_tick(cpu->bus, 1);
     cpu_push_byte(cpu, (uint8_t)((ret >> 8) & 0xFFu));
     cpu_push_byte(cpu, (uint8_t)(ret & 0xFFu));
+    if (cpu->bus && cpu->bus->cart) {
+        cart_fe_on_byte(cpu->bus->cart, (uint8_t)((addr >> 8) & 0xFFu));
+    }
     cpu->PC = addr;
 }
 
@@ -185,6 +184,9 @@ static void instr_RTS(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
     uint8_t lo = cpu_pull_byte(cpu);
     uint8_t hi = cpu_pull_byte(cpu);
+    if (cpu->bus && cpu->bus->cart) {
+        cart_fe_on_rts_hi(cpu->bus->cart, hi);
+    }
     bus_tick(cpu->bus, 2);
     cpu->PC = (uint16_t)((((uint16_t)hi << 8) | lo) + 1u);
 }

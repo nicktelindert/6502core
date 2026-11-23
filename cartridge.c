@@ -10,6 +10,12 @@ static const uint32_t F6SC_CRC32_LIST[] = {
     0x5A27B58Cu  /* Dig Dug (Rev 1) */
 };
 
+static const uint32_t F8FE_CRC32_LIST[] = {
+    0xcde3530e, //Stargate
+    0xe127c012,
+    0x93217704
+};
+
 uint32_t cart_crc32(const uint8_t *data, size_t len) {
     uint32_t crc = 0xFFFFFFFFu;
     for (size_t i = 0; i < len; i++) {
@@ -124,6 +130,52 @@ static void write_f6sc(Cartridge *cart, uint16_t address, uint8_t value) {
     write_f6(cart, addr, value);
 }
 
+void cart_fe_on_byte(Cartridge *cart, uint8_t val) {
+    if (!cart || cart->type != CART_TYPE_FE || cart->num_banks < 2) {
+        return;
+    }
+    cart->current_bank = (val & 0x20u) ? 0 : 1;
+}
+
+void cart_fe_on_rts_hi(Cartridge *cart, uint8_t hi) {
+    cart_fe_on_byte(cart, hi);
+}
+
+
+static void cart_fe_check_bus(Cartridge *cart, uint16_t addr, uint8_t val) {
+    uint16_t a = addr & 0x1FFFu;
+    cart->current_bank = (val & 0x20u);
+}
+
+uint8_t read_fe(Cartridge *cart, uint16_t addr) {
+    uint8_t val = cart->banks[cart->current_bank][addr & 0x0FFFu];
+    return val;
+}
+
+void write_fe(Cartridge *cart, uint16_t addr, uint8_t val) {
+    (void)addr;
+    (void)val;
+    if (!cart || !cart->has_superchip_ram) {
+        return;
+    }
+}
+
+bool is_f8fe (const uint8_t *rom_data, size_t size, uint32_t crc) {    
+    if (size != 0x2000u) {
+        return false;
+    }
+
+    size_t num_known = sizeof(F8FE_CRC32_LIST) / sizeof(F8FE_CRC32_LIST[0]);
+    for (size_t i = 0; i < num_known; i++) {
+        if (crc == F8FE_CRC32_LIST[i]) {
+            return true;
+        }
+    }
+
+    return false;
+
+}
+
 bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size, const char *name) {
     if (!cart || !rom_data || size == 0) {
         return false;
@@ -137,10 +189,19 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
         cart->read = read_2k4k;
         cart->write = write_noop;
     } else if (size == 0x2000u) {
-        cart->type = CART_TYPE_F8;
-        cart->num_banks = 2;
-        cart->read = read_f8;
-        cart->write = write_f8;
+        cart->crc32 = cart_crc32(rom_data, size);
+        if (is_f8fe(rom_data, size, cart->crc32)) {
+            cart->type = CART_TYPE_FE;
+            cart->num_banks = 2;
+            cart->read = read_fe;
+            cart->write = write_fe;
+        } else {
+            cart->type = CART_TYPE_F8;
+            cart->num_banks = 2;
+            cart->read = read_f8;
+            cart->write = write_f8;
+        }
+
     } else if (size == 0x4000u) {
         cart->crc32 = cart_crc32(rom_data, size);
         if (is_f6sc(rom_data, size, cart->crc32)) {
@@ -198,6 +259,15 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
                 break;
             }
         }
+    }
+
+    if (cart->type == CART_TYPE_FE) {
+        cart->num_banks = 2;
+        cart->banks[0] = &cart->rom_data[0x0000];
+        cart->banks[1] = &cart->rom_data[0x1000];
+        // Startbank op basis van reset-vector ($1FFC/$1FFD)
+        uint16_t vec0 = (uint16_t)(cart->banks[0][0xFFCu] | ((uint16_t)cart->banks[0][0xFFDu] << 8));
+        cart->current_bank = (vec0 & 0x1000u) ? 0 : 1;
     }
 
     return true;

@@ -6,5 +6,5 @@ Dus de boel is inmiddels omgeschreven naar C, er zitten alleen nog wat bugs in d
 
 
 ## Bugs
-- Super chips werken nu niet dit moet nog gefixt worden.
+-  FE bank switching werkt niet bij Star Gate
 
