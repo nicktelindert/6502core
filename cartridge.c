@@ -75,23 +75,6 @@ static bool is_f8sc(const uint8_t *rom_data, size_t size, uint32_t crc) {
         }
     }
 
-    for (int bank = 0; bank < 4; bank++) {
-        const uint8_t *page = &rom_data[(size_t)bank * 0x1000u];
-        uint8_t first = page[0];
-        if (first == 0x00u || first == 0xFFu) {
-            bool all_same = true;
-            for (int i = 1; i < 0x100; i++) {
-                if (page[i] != first) {
-                    all_same = false;
-                    break;
-                }
-            }
-            if (all_same) {
-                return true;
-            }
-        }
-    }
-
     return false;
 }
 
@@ -115,33 +98,16 @@ static void check_hotspot_f8(Cartridge *cart, uint16_t address) {
     }
 }
 
-static void check_hotspot_f8SC(Cartridge *cart, uint16_t address) {
-    uint16_t addr = (uint16_t)(address & 0x1FFFu);
-    if (addr == 0x1FF8u) {
-        cart->current_bank = 0;
-    } else if (addr == 0x1FF9u) {
-        cart->current_bank = 1;
-    }
-}
-
 
 static uint8_t read_f8(Cartridge *cart, uint16_t address) {
-    if (cart->type == CART_TYPE_F8SC) {
-        check_hotspot_f8SC(cart,address);
-    } else {
-        check_hotspot_f8(cart, address);
-    }
+    check_hotspot_f8(cart, address);
     
     return cart->banks[cart->current_bank][address & 0x0FFFu];
 }
 
 static void write_f8(Cartridge *cart, uint16_t address, uint8_t value) {
     (void)value;
-    if (cart->type == CART_TYPE_F8SC) {
-        check_hotspot_f8SC(cart,address);
-    } else {
-        check_hotspot_f8(cart, address);
-    }
+    check_hotspot_f8(cart, address);
     
 }
 

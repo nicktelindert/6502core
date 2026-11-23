@@ -441,6 +441,7 @@ int main(int argc, char **argv) {
     overlay.show_rom_menu = false;
     overlay.selected_rom_idx = 0;
     bool uncapped = false;
+    static double current_fps = 60.0;
 
     if (argc == 2) {
         if (strcmp(argv[1], "--uncapped") == 0)  {           
@@ -458,6 +459,7 @@ int main(int argc, char **argv) {
         emu_load_rom(&emu, argv[1]);
         overlay.show_rom_menu = false;
     }
+
     while (running) {
         uint64_t frame_start = SDL_GetPerformanceCounter();
         
@@ -536,19 +538,7 @@ int main(int argc, char **argv) {
             SDL_UpdateTexture(texture, NULL, blank, TIA_FB_WIDTH * 3);
         }
        
-        uint64_t now = SDL_GetPerformanceCounter();
-        double frame_dt = (double)(now - frame_start) / (double)perf_freq;
-        static double accum_time = 0.0;
-        static int accum_frames = 0;
-        static double current_fps = 60.0;
-
-        accum_time += frame_dt;
-        accum_frames++;
-        if (accum_time >= 0.5) {
-            current_fps = (double)accum_frames / accum_time;
-            accum_time = 0.0;
-            accum_frames = 0;
-        }   
+      
 
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
@@ -567,6 +557,19 @@ int main(int argc, char **argv) {
                     /* Fijnafstemming tot exact 16.67 ms */
                 }
             }
+        }  
+
+        uint64_t now = SDL_GetPerformanceCounter();
+        double frame_dt = (double)(now - frame_start) / (double)perf_freq;
+        static double accum_time = 0.0;
+        static int accum_frames = 0;
+
+        accum_time += frame_dt;
+        accum_frames++;
+        if (accum_time >= 0.5) {
+            current_fps = (double)accum_frames / accum_time;
+            accum_time = 0.0;
+            accum_frames = 0;
         }  
 
     }
