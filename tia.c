@@ -25,26 +25,7 @@ static const uint8_t NTSC_HUES[16][3] = {
     {184, 108, 24}   /* F: Warm bruin / oker */
 };
 
-static bool is_delayed_reg(uint8_t reg) {
-    switch (reg) {
-        case 0x0Du: case 0x0Eu: case 0x0Fu:
-        case 0x1Bu: case 0x1Cu: case 0x1Fu:
-            return true;
-        default:
-            return false;
-    }
-}
 
-static bool is_non_visual_reg(uint8_t reg) {
-    switch (reg) {
-        case 0x02u: case 0x03u:
-        case 0x15u: case 0x16u: case 0x17u: case 0x18u: case 0x19u: case 0x1Au:
-        case 0x20u: case 0x21u: case 0x22u: case 0x23u: case 0x24u: case 0x2Bu:
-            return true;
-        default:
-            return false;
-    }
-}
 
 static int mod_160(int val) {
     int r = val % 160;
@@ -127,14 +108,10 @@ uint8_t tia_read(TIA *tia, uint16_t addr) {
 }
 
 void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
+    tia_render_up_to_clock(tia, tia->clock);
     uint8_t reg = (uint8_t)(addr & 0x3Fu);
     uint8_t v = val;
 
-    if (is_delayed_reg(reg)) {
-        tia_render_up_to_clock(tia, tia->clock >= 226 ? 228 : tia->clock + 2);
-    } else if (!is_non_visual_reg(reg)) {
-        tia_render_up_to_clock(tia, tia->clock);
-    }
 
     switch (reg) {
         case 0x00u: /* VSYNC */
@@ -568,7 +545,7 @@ void tia_step(TIA *tia, int color_clocks) {
     tia->clock += color_clocks;
     tia->audio_clock += color_clocks;
 
-    if (tia->clock + color_clocks < 68) {
+    if (tia->clock < 68) {
         return;
     }
 
@@ -598,13 +575,5 @@ void tia_step(TIA *tia, int color_clocks) {
         }
         tia->rendered_clock = 0;
         tia->scanline += 1;
-        if (tia->scanline >= 262) {
-            tia->audio_mid_done = false;
-            tia->scanline = 0;
-            tia->frame_ready = true;
-            if (tia->audio) {
-                tia_audio_flush_frame(tia->audio);
-            }
-        }
     }
 }
