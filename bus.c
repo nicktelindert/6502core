@@ -50,7 +50,7 @@ uint8_t bus_read(Bus *bus, uint16_t address) {
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     Cartridge *cart = bus->cart;
 
-    if (addr >= 0x0100u && addr <= 0x01FFu) {
+    if (addr >= 0x0100u && addr <= 0x01FFu && cart->type == CART_TYPE_FE) {
         return bus->ram[addr & 0x007Fu];
     }
 
@@ -84,7 +84,7 @@ void bus_write(Bus *bus, uint16_t address, uint8_t value) {
     uint8_t v = value;
     Cartridge *cart = bus->cart;
 
-    if (addr >= 0x0100u && addr <= 0x01FFu) {
+    if (addr >= 0x0100u && addr <= 0x01FFu && cart->type == CART_TYPE_FE) {
         bus->ram[addr & 0x007Fu] = v;
         return;
     }
