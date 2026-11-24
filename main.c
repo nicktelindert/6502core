@@ -39,6 +39,12 @@ typedef struct {
     int debug_line_count;
 } OverlayState;
 
+typedef struct {
+    int top_crop;       /* aantal bovenste regels om bij weergave over te slaan */
+    int view_height;    /* aantal zichtbare regels in het uitvoerbeeld */
+} DisplayCrop;
+
+
 
 /* Minimale 5x7 bitmap glyphs (bovenste 5 bits per rij gebruikt) */
 static const uint8_t FONT_5X7[128][7] = {
@@ -240,6 +246,33 @@ static int cmp_str(const void *a, const void *b) {
     return strcmp(sa, sb);
 }
 
+static void present_framebuffer(
+    const uint8_t *fb,
+    int fb_width,
+    int fb_height,
+    DisplayCrop crop,
+    uint8_t *out_pixels
+) {
+    for (int dst_y = 0; dst_y < crop.view_height; dst_y++) {
+        int src_y = dst_y + crop.top_crop;
+        const uint8_t *src_row;
+
+        if (src_y < 0 || src_y >= fb_height) {
+            for (int x = 0; x < fb_width; x++) {
+                out_pixels[dst_y * fb_width + x] = 0u;
+            }
+            continue;
+        }
+
+        src_row = fb + (src_y * fb_width);
+        for (int x = 0; x < fb_width; x++) {
+            out_pixels[dst_y * fb_width + x] = src_row[x];
+        }
+    }
+}
+
+
+
 static void overlay_scan_roms(OverlayState *ov) {
     for (int i = 0; i < ov->rom_count; ++i) free(ov->roms[i]);
     free(ov->roms);
@@ -294,7 +327,6 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     char header[256];
 
     draw_overlay_box(renderer, 15, 15, win_w - 30, win_h - 30, 225);
-    snprintf(header, sizeof(header), "Select a ROM from ./%s/ (Enter = Start, F2 = Close)", ov->rom_dir);
     draw_text(renderer, 25, 25, header, green, 2);
 
     if (ov->rom_count == 0) {
@@ -374,6 +406,9 @@ int main(int argc, char **argv) {
     int win_w = TIA_FB_WIDTH * scale;
     int win_h = TIA_FB_HEIGHT * scale;
 
+    DisplayCrop cropped = {.top_crop = 2, .view_height = TIA_FB_HEIGHT - 2};
+    size_t out_size = (TIA_FB_WIDTH * TIA_FB_HEIGHT * scale);
+    uint8_t *out_pixels = malloc(out_size);
     SDL_Window *window = SDL_CreateWindow(
         "6502core (Press F1 to open the menu)",
         SDL_WINDOWPOS_CENTERED,
@@ -444,16 +479,17 @@ int main(int argc, char **argv) {
     const double target_frame_ms = 1000.0 / 60.0; /* ~16.6667 ms */
     OverlayState overlay = {0};
     snprintf(overlay.rom_dir, sizeof(overlay.rom_dir), "roms");
-    overlay.show_help = true;
+    overlay.show_help = false;
     overlay.show_rom_menu = false;
     overlay.selected_rom_idx = 0;
     bool uncapped = false;
 
-    if (argc == 1) {
+    if (argc == 2) {
         emu_load_rom(&emu, argv[1]);
         overlay.show_rom_menu = false;
     }
 
+    
     while (running) {
         uint64_t frame_start = SDL_GetPerformanceCounter();
         
@@ -540,7 +576,8 @@ int main(int argc, char **argv) {
                 }
             }
 
-            SDL_UpdateTexture(texture, NULL, emu.tia.framebuffer, TIA_FB_WIDTH * 3);
+            present_framebuffer(emu.tia.framebuffer, TIA_FB_WIDTH * 3, TIA_FB_HEIGHT * 3, cropped, out_pixels);
+            SDL_UpdateTexture(texture, NULL, out_pixels, (TIA_FB_WIDTH)* 3);
         } else {
             /* Leeg/donker scherm zolang er nog geen ROM actief is */
             uint8_t blank[TIA_FB_SIZE];

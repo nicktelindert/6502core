@@ -26,7 +26,6 @@ static const uint8_t NTSC_HUES[16][3] = {
 };
 
 
-
 static int mod_160(int val) {
     int r = val % 160;
     return r < 0 ? r + 160 : r;
@@ -306,7 +305,6 @@ static void tia_render_pixel(TIA *tia, int clk) {
     if (x < 0 || x >= 160) {
         return;
     }
-
    
     int y = tia->y;
 
@@ -324,6 +322,9 @@ static void tia_render_pixel(TIA *tia, int clk) {
         return;
     }
 
+    if (!tia->start_drawing) {
+        return;
+    }
     uint8_t active_grp0 = tia->vdelp0 ? tia->grp0_old : tia->grp0;
     uint8_t active_grp1 = tia->vdelp1 ? tia->grp1_old : tia->grp1;
     uint8_t active_enabl = tia->vdelbl ? tia->enabl_old : tia->enabl;

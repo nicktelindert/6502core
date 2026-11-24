@@ -4,3 +4,4 @@ __pycache__/
 *.bin
 atari2600
 atari2600_dbg
+6502core

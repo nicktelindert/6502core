@@ -6,7 +6,7 @@
 
 #define TIA_FB_WIDTH  160
 #define TIA_FB_HEIGHT 192
-#define TIA_FB_SIZE   (TIA_FB_WIDTH * TIA_FB_HEIGHT * 3)
+#define TIA_FB_SIZE   (TIA_FB_WIDTH * TIA_FB_HEIGHT * 6)
 
 typedef struct TIAAudio TIAAudio;
 
