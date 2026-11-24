@@ -85,6 +85,8 @@ void tia_init(TIA *tia, TIAAudio *audio) {
     tia->width = TIA_FB_WIDTH;
     tia->height = TIA_FB_HEIGHT;
     tia->clock = 0;
+    tia->y = 0;
+    tia->start_drawing = false;
 
     for (int c = 0; c < 256; c++) {
         compute_ntsc_rgb((uint8_t)c, tia->ntsc_lut[c]);
@@ -116,9 +118,16 @@ void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
     switch (reg) {
         case 0x00u: /* VSYNC */
             tia->vsync = v;
+            tia->vsync_on = v & 0x02u;
+            tia->y = 0;
+            tia->start_drawing = false;
             break;
         case 0x01u: /* VBLANK */
             tia->vblank = v;
+            tia->start_drawing = false;
+            if ((v & 0x02u) == 0) {
+                tia->start_drawing = true;
+            }
             break;
         case 0x02u: /* WSYNC */
             if (tia->clock != 0) {
@@ -298,10 +307,8 @@ static void tia_render_pixel(TIA *tia, int clk) {
         return;
     }
 
-    int y = tia->scanline - 40;
-    if (y < 0 || y >= tia->height) {
-        return;
-    }
+   
+    int y = tia->y;
 
     if (y == 0 && x == 0) {
         tia->frame_p0_top_y = -1;
@@ -514,23 +521,28 @@ void tia_tick_clock(TIA *tia) {
     clk += 1;
     if (clk >= 228) {
         clk = 0;
+
+        if (tia->start_drawing) {
+            if (tia->y + 1 < TIA_FB_HEIGHT) {
+                tia->y += 1;
+            }
+        }
+
         tia->scanline += 1;
         if (tia->wsync) {
             tia->wsync = false;
         }
 
-        if ((tia->vsync & 0x02u) && !tia->frame_done_for_vsync && tia->scanline >= 200) {
-            tia->frame_done_for_vsync = true;
+        if ((!tia->prev_vsync_on && tia->vsync_on)) {
             tia->frame_ready = true;
             if (tia->audio) {
                 tia_audio_flush_frame(tia->audio);
             }
             tia->scanline = 0;
         }
+        
+        tia->prev_vsync_on = tia->vsync_on;
 
-        if (!(tia->vsync & 0x02u)) {
-            tia->frame_done_for_vsync = false;
-        }
     }
 
     tia->clock = clk;
