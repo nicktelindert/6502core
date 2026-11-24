@@ -170,7 +170,7 @@ static void emu_destroy(Emulator *emu) {
 static bool emu_load_rom(Emulator *emu, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
-        fprintf(stderr, "Kan ROM niet openen: %s\n", path);
+        fprintf(stderr, "Unable to open rom: %s\n", path);
         return false;
     }
 
@@ -276,8 +276,8 @@ static void overlay_draw_help(OverlayState *ov, SDL_Renderer *renderer, double f
     char buf[160];
 
     draw_overlay_box(renderer, 15, 15, 510, 200, 200);
-    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | ESC: Afsluiten", green, 2);
-    draw_text(renderer, 25, 55, "ASWD: Bewegen CTRL/SHIFT: action buttons", green, 2);
+    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | F3: Disable Frame limit| ESC: Quit", green, 2);
+    draw_text(renderer, 25, 55, "ASWD: Movement CTRL/SHIFT: Fire/Reset", green, 2);
 
     snprintf(buf, sizeof(buf), "FPS: %.1f", fps);
     draw_text(renderer, 25, 85, buf, green, 2);
@@ -294,11 +294,11 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     char header[256];
 
     draw_overlay_box(renderer, 15, 15, win_w - 30, win_h - 30, 225);
-    snprintf(header, sizeof(header), "Selecteer ROM uit ./%s/ (Enter = start, F2 = sluit)", ov->rom_dir);
+    snprintf(header, sizeof(header), "Select a ROM from ./%s/ (Enter = Start, F2 = Close)", ov->rom_dir);
     draw_text(renderer, 25, 25, header, green, 2);
 
     if (ov->rom_count == 0) {
-        draw_text(renderer, 25, 65, "Geen .bin / .a26 / .rom bestanden in ./roms/", warn, 2);
+        draw_text(renderer, 25, 65, "No roms found in ./roms", warn, 2);
         return;
     }
 
@@ -375,7 +375,7 @@ int main(int argc, char **argv) {
     int win_h = TIA_FB_HEIGHT * scale;
 
     SDL_Window *window = SDL_CreateWindow(
-        "Atari 2600 Emulator",
+        "6502core (Press F1 to open the menu)",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         win_w,
@@ -449,19 +449,7 @@ int main(int argc, char **argv) {
     overlay.selected_rom_idx = 0;
     bool uncapped = false;
 
-    if (argc == 2) {
-        if (strcmp(argv[1], "--uncapped") == 0)  {           
-             uncapped = true;
-        } else {
-            emu_load_rom(&emu, argv[1]);
-            overlay.show_rom_menu = false;
-        }
-    } else if (argc == 3){
-        if (strcmp(argv[2], "--uncapped") == 0)  {
-            uncapped = true;
-        } else {
-            printf ("%s is not a valid argument", argv[2]);
-        }
+    if (argc == 1) {
         emu_load_rom(&emu, argv[1]);
         overlay.show_rom_menu = false;
     }

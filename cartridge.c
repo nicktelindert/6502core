@@ -63,7 +63,7 @@ static bool is_f6sc(const uint8_t *rom_data, size_t size, uint32_t crc) {
     return false;
 }
 
-static bool is_f8sc(const uint8_t *rom_data, size_t size, uint32_t crc) {
+static bool is_f8sc(size_t size, uint32_t crc) {
     if (size != 0x2000u) {
         return false;
     }
@@ -180,12 +180,6 @@ void cart_fe_on_rts_hi(Cartridge *cart, uint8_t hi) {
     cart_fe_on_byte(cart, hi);
 }
 
-
-static void cart_fe_check_bus(Cartridge *cart, uint16_t addr, uint8_t val) {
-    uint16_t a = addr & 0x1FFFu;
-    cart->current_bank = (val & 0x20u);
-}
-
 uint8_t read_fe(Cartridge *cart, uint16_t addr) {
     uint8_t val = cart->banks[cart->current_bank][addr & 0x0FFFu];
     return val;
@@ -199,7 +193,7 @@ void write_fe(Cartridge *cart, uint16_t addr, uint8_t val) {
     }
 }
 
-bool is_f8fe (const uint8_t *rom_data, size_t size, uint32_t crc) {    
+bool is_f8fe (size_t size, uint32_t crc) {    
     if (size != 0x2000u) {
         return false;
     }
@@ -229,12 +223,12 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
         cart->write = write_noop;
     } else if (size == 0x2000u) {
         cart->crc32 = cart_crc32(rom_data, size);
-        if (is_f8fe(rom_data, size, cart->crc32)) {
+        if (is_f8fe(size, cart->crc32)) {
             cart->type = CART_TYPE_FE;
             cart->num_banks = 2;
             cart->read = read_fe;
             cart->write = write_fe;
-        } else if(is_f8sc(rom_data, size, cart->crc32)) {
+        } else if(is_f8sc(size, cart->crc32)) {
             cart->type = CART_TYPE_F8SC;
             cart->num_banks = 2;
             cart->has_superchip_ram = true;
