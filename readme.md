@@ -6,5 +6,5 @@ Dus de boel is inmiddels omgeschreven naar C, er zitten alleen nog wat bugs in d
 
 
 ## Bugs
--  FE bank switching werkt niet bij Star Gate
+-  Grafische bugs bij Jungle Hunt en Stargate vermoedelijk een issue in de TIA afhandeling
 
