@@ -84,6 +84,7 @@ void tia_init(TIA *tia, TIAAudio *audio) {
     tia->inpt5 = 0x80u;
     tia->width = TIA_FB_WIDTH;
     tia->height = TIA_FB_HEIGHT;
+    tia->clock = 0;
 
     for (int c = 0; c < 256; c++) {
         compute_ntsc_rgb((uint8_t)c, tia->ntsc_lut[c]);
@@ -108,22 +109,12 @@ uint8_t tia_read(TIA *tia, uint16_t addr) {
 }
 
 void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
-    tia_render_up_to_clock(tia, tia->clock);
     uint8_t reg = (uint8_t)(addr & 0x3Fu);
     uint8_t v = val;
 
 
     switch (reg) {
         case 0x00u: /* VSYNC */
-            if ((v & 0x02u) && !(tia->vsync & 0x02u)) {
-                if (tia->scanline >= 200) {
-                    tia->frame_ready = true;
-                    if (tia->audio) {
-                        tia_audio_flush_frame(tia->audio);
-                    }
-                }
-                tia->scanline = 0;
-            }
             tia->vsync = v;
             break;
         case 0x01u: /* VBLANK */
@@ -301,33 +292,28 @@ void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
     }
 }
 
-void tia_render_up_to_clock(TIA *tia, int target_clock) {
-    int y = tia->scanline - 40;
-    if (!(0 <= y && y < tia->height)) {
-        tia->rendered_clock = target_clock;
+static void tia_render_pixel(TIA *tia, int clk) {
+    int x = clk - 68;
+    if (x < 0 || x >= 160) {
         return;
     }
 
-    int start = (tia->rendered_clock > 68) ? tia->rendered_clock : 68;
-    int end = (target_clock < 228) ? target_clock : 228;
-    if (y == 0 && start <= 68) {
-        tia->frame_p0_top_y = -1;
-    }
-    if (start >= end) {
-        tia->rendered_clock = target_clock;
+    int y = tia->scanline - 40;
+    if (y < 0 || y >= tia->height) {
         return;
+    }
+
+    if (y == 0 && x == 0) {
+        tia->frame_p0_top_y = -1;
     }
 
     uint8_t *fb = tia->framebuffer;
-    int row_offset = y * 480; /* 160 * 3 */
-    int x_start = start - 68;
-    int x_end = end - 68;
+    int idx = (y * 480) + (x * 3); /* 160 * 3 bytes per scanline */
 
     if (tia->vblank & 0x02u) {
-        int s_idx = row_offset + x_start * 3;
-        int e_idx = row_offset + x_end * 3;
-        memset(&fb[s_idx], 0, (size_t)(e_idx - s_idx));
-        tia->rendered_clock = target_clock;
+        fb[idx]     = 0;
+        fb[idx + 1] = 0;
+        fb[idx + 2] = 0;
         return;
     }
 
@@ -351,16 +337,9 @@ void tia_render_up_to_clock(TIA *tia, int target_clock) {
 
     if (!active_grp0 && !active_grp1 && !m0_en && !m1_en && !bl_en && !has_pf) {
         const uint8_t *bg = tia->ntsc_lut[colubk];
-        int idx = row_offset + x_start * 3;
-        for (int x = x_start; x < x_end; x++) {
-            fb[idx]     = bg[0];
-            fb[idx + 1] = bg[1];
-            fb[idx + 2] = bg[2];
-            idx += 3;
-        }
-        if (target_clock > tia->rendered_clock) {
-            tia->rendered_clock = target_clock;
-        }
+        fb[idx]     = bg[0];
+        fb[idx + 1] = bg[1];
+        fb[idx + 2] = bg[2];
         return;
     }
 
@@ -407,163 +386,161 @@ void tia_render_up_to_clock(TIA *tia, int target_clock) {
         }
     }
 
-    uint8_t cxm0p = tia->cxm0p;
-    uint8_t cxm1p = tia->cxm1p;
-    uint8_t cxp0fb = tia->cxp0fb;
-    uint8_t cxp1fb = tia->cxp1fb;
-    uint8_t cxm0fb = tia->cxm0fb;
-    uint8_t cxm1fb = tia->cxm1fb;
-    uint8_t cxblpf = tia->cxblpf;
-    uint8_t cxppmm = tia->cxppmm;
-    int p0_top_y = tia->frame_p0_top_y;
-
-    int idx = row_offset + x_start * 3;
-    for (int x = x_start; x < x_end; x++) {
-        bool p0_on = false;
-        if (active_grp0) {
-            for (int k = 0; k < lay0.num_offsets; k++) {
-                int dx = x - (p0_x + lay0.offsets[k]);
-                if (0 <= dx && dx < p0_w) {
-                    int px = dx / p0_scale;
-                    int bit = refp0 ? px : (7 - px);
-                    if ((active_grp0 >> bit) & 1) {
-                        p0_on = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        bool p1_on = false;
-        if (active_grp1) {
-            for (int k = 0; k < lay1.num_offsets; k++) {
-                int dx = x - (p1_x + lay1.offsets[k]);
-                if (0 <= dx && dx < p1_w) {
-                    int px = dx / p1_scale;
-                    int bit = refp1 ? px : (7 - px);
-                    if ((active_grp1 >> bit) & 1) {
-                        p1_on = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        bool m0_on = false;
-        if (m0_en) {
-            for (int k = 0; k < lay0.num_offsets; k++) {
-                int dx = x - (m0_x + lay0.offsets[k]);
-                if (0 <= dx && dx < m0_w) {
-                    m0_on = true;
+    bool p0_on = false;
+    if (active_grp0) {
+        for (int k = 0; k < lay0.num_offsets; k++) {
+            int dx = x - (p0_x + lay0.offsets[k]);
+            if (0 <= dx && dx < p0_w) {
+                int px = dx / p0_scale;
+                int bit = refp0 ? px : (7 - px);
+                if ((active_grp0 >> bit) & 1) {
+                    p0_on = true;
                     break;
                 }
             }
         }
+    }
 
-        bool m1_on = false;
-        if (m1_en) {
-            for (int k = 0; k < lay1.num_offsets; k++) {
-                int dx = x - (m1_x + lay1.offsets[k]);
-                if (0 <= dx && dx < m1_w) {
-                    m1_on = true;
+    bool p1_on = false;
+    if (active_grp1) {
+        for (int k = 0; k < lay1.num_offsets; k++) {
+            int dx = x - (p1_x + lay1.offsets[k]);
+            if (0 <= dx && dx < p1_w) {
+                int px = dx / p1_scale;
+                int bit = refp1 ? px : (7 - px);
+                if ((active_grp1 >> bit) & 1) {
+                    p1_on = true;
                     break;
                 }
             }
         }
-
-        bool bl_on = bl_en && (0 <= (x - bl_x) && (x - bl_x) < bl_w);
-        bool pf_on = has_pf ? (pf_bits[x >> 2] != 0) : false;
-
-        if (p0_on && p0_top_y < 0) {
-            p0_top_y = y;
-        }
-
-        if (p0_on || p1_on || m0_on || m1_on || bl_on) {
-            if (m0_on) {
-                if (p1_on) cxm0p |= 0x80u;
-                if (p0_on) cxm0p |= 0x40u;
-                if (pf_on) cxm0fb |= 0x80u;
-                if (bl_on) cxm0fb |= 0x40u;
-                if (m1_on) cxppmm |= 0x40u;
-            }
-            if (m1_on) {
-                if (p0_on) cxm1p |= 0x80u;
-                if (p1_on) cxm1p |= 0x40u;
-                if (pf_on) cxm1fb |= 0x80u;
-                if (bl_on) cxm1fb |= 0x40u;
-            }
-            if (p0_on) {
-                if (pf_on) cxp0fb |= 0x80u;
-                if (bl_on) cxp0fb |= 0x40u;
-                if (p1_on) cxppmm |= 0x80u;
-            }
-            if (p1_on) {
-                if (pf_on) cxp1fb |= 0x80u;
-                if (bl_on) cxp1fb |= 0x40u;
-            }
-            if (bl_on && pf_on) {
-                cxblpf |= 0x80u;
-            }
-        }
-
-        uint8_t pfc = pf_score ? ((x < 80) ? colup0 : colup1) : colupf;
-        uint8_t c;
-        if (pf_prio) {
-            if (pf_on || bl_on) c = pfc;
-            else if (p0_on || m0_on) c = colup0;
-            else if (p1_on || m1_on) c = colup1;
-            else c = colubk;
-        } else {
-            if (p0_on || m0_on) c = colup0;
-            else if (p1_on || m1_on) c = colup1;
-            else if (pf_on || bl_on) c = pfc;
-            else c = colubk;
-        }
-
-        const uint8_t *rgb = tia->ntsc_lut[c];
-        fb[idx]     = rgb[0];
-        fb[idx + 1] = rgb[1];
-        fb[idx + 2] = rgb[2];
-        idx += 3;
     }
 
-    tia->frame_p0_top_y = p0_top_y;
-    tia->cxm0p = cxm0p;
-    tia->cxm1p = cxm1p;
-    tia->cxp0fb = cxp0fb;
-    tia->cxp1fb = cxp1fb;
-    tia->cxm0fb = cxm0fb;
-    tia->cxm1fb = cxm1fb;
-    tia->cxblpf = cxblpf;
-    tia->cxppmm = cxppmm;
-    if (target_clock > tia->rendered_clock) {
-        tia->rendered_clock = target_clock;
+    bool m0_on = false;
+    if (m0_en) {
+        for (int k = 0; k < lay0.num_offsets; k++) {
+            int dx = x - (m0_x + lay0.offsets[k]);
+            if (0 <= dx && dx < m0_w) {
+                m0_on = true;
+                break;
+            }
+        }
     }
+
+    bool m1_on = false;
+    if (m1_en) {
+        for (int k = 0; k < lay1.num_offsets; k++) {
+            int dx = x - (m1_x + lay1.offsets[k]);
+            if (0 <= dx && dx < m1_w) {
+                m1_on = true;
+                break;
+            }
+        }
+    }
+
+    bool bl_on = bl_en && (0 <= (x - bl_x) && (x - bl_x) < bl_w);
+    bool pf_on = has_pf ? (pf_bits[x >> 2] != 0) : false;
+
+    if (p0_on && tia->frame_p0_top_y < 0) {
+        tia->frame_p0_top_y = y;
+    }
+
+    if (p0_on || p1_on || m0_on || m1_on || bl_on) {
+        if (m0_on) {
+            if (p1_on) tia->cxm0p |= 0x80u;
+            if (p0_on) tia->cxm0p |= 0x40u;
+            if (pf_on) tia->cxm0fb |= 0x80u;
+            if (bl_on) tia->cxm0fb |= 0x40u;
+            if (m1_on) tia->cxppmm |= 0x40u;
+        }
+        if (m1_on) {
+            if (p0_on) tia->cxm1p |= 0x80u;
+            if (p1_on) tia->cxm1p |= 0x40u;
+            if (pf_on) tia->cxm1fb |= 0x80u;
+            if (bl_on) tia->cxm1fb |= 0x40u;
+        }
+        if (p0_on) {
+            if (pf_on) tia->cxp0fb |= 0x80u;
+            if (bl_on) tia->cxp0fb |= 0x40u;
+            if (p1_on) tia->cxppmm |= 0x80u;
+        }
+        if (p1_on) {
+            if (pf_on) tia->cxp1fb |= 0x80u;
+            if (bl_on) tia->cxp1fb |= 0x40u;
+        }
+        if (bl_on && pf_on) {
+            tia->cxblpf |= 0x80u;
+        }
+    }
+
+    uint8_t pfc = pf_score ? ((x < 80) ? colup0 : colup1) : colupf;
+    uint8_t c;
+    if (pf_prio) {
+        if (pf_on || bl_on) c = pfc;
+        else if (p0_on || m0_on) c = colup0;
+        else if (p1_on || m1_on) c = colup1;
+        else c = colubk;
+    } else {
+        if (p0_on || m0_on) c = colup0;
+        else if (p1_on || m1_on) c = colup1;
+        else if (pf_on || bl_on) c = pfc;
+        else c = colubk;
+    }
+
+    const uint8_t *rgb = tia->ntsc_lut[c];
+    fb[idx]     = rgb[0];
+    fb[idx + 1] = rgb[1];
+    fb[idx + 2] = rgb[2];
 }
 
-void tia_step(TIA *tia, int color_clocks) {
-    tia->clock += color_clocks;
-    tia->audio_clock += color_clocks;
+void tia_tick_clock(TIA *tia) {
+    int clk = tia->clock;
 
-    if (tia->clock < 68) {
-        return;
-    }
-
-
-    while (tia->audio_clock >= 114) {
+    /* 1. Audio-klok (114 color clocks per halve scanline) */
+    tia->audio_clock += 1;
+    if (tia->audio_clock >= 114) {
         tia->audio_clock -= 114;
         if (tia->audio) {
             tia_audio_tick_half_scanline(tia->audio);
         }
     }
 
-    while (tia->clock >= 228) {
-        tia_render_up_to_clock(tia, 228);
-        tia->clock = 0;
-        tia->rendered_clock = 0;
+    /* 2. Zichtbare pixel op color clocks 68..227 */
+    if (clk >= 68 && clk < 228) {
+        tia_render_pixel(tia, clk);
+    }
+
+    /* 3. Color clock vooruitzetten en scanline-/frame-grenzen afhandelen */
+    clk += 1;
+    if (clk >= 228) {
+        clk = 0;
         tia->scanline += 1;
         if (tia->wsync) {
             tia->wsync = false;
         }
+
+        if ((tia->vsync & 0x02u) && !tia->frame_done_for_vsync && tia->scanline >= 200) {
+            tia->frame_done_for_vsync = true;
+            tia->frame_ready = true;
+            if (tia->audio) {
+                tia_audio_flush_frame(tia->audio);
+            }
+            tia->scanline = 0;
+        }
+
+        if (!(tia->vsync & 0x02u)) {
+            tia->frame_done_for_vsync = false;
+        }
+    }
+
+    tia->clock = clk;
+}
+
+void tia_step(TIA *tia, int color_clocks) {
+    if (!tia || color_clocks <= 0) {
+        return;
+    }
+    for (int i = 0; i < color_clocks; i++) {
+        tia_tick_clock(tia);
     }
 }

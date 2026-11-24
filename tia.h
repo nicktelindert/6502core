@@ -20,6 +20,7 @@ typedef struct TIA {
     TIAAudio *audio;
     int audio_clock;
     bool audio_mid_done;
+    bool frame_done_for_vsync;
 
     int frame_p0_top_y;
     int debug_p0_x;
@@ -105,7 +106,6 @@ typedef struct TIA {
 void tia_init(TIA *tia, TIAAudio *audio);
 uint8_t tia_read(TIA *tia, uint16_t addr);
 void tia_write(TIA *tia, uint16_t addr, uint8_t val);
-void tia_render_up_to_clock(TIA *tia, int target_clock);
 void tia_step(TIA *tia, int color_clocks);
 
 #endif /* TIA_H */

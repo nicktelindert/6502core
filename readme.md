@@ -6,8 +6,10 @@ Dus de boel is inmiddels omgeschreven naar C, er zitten alleen nog wat bugs in d
 
 
 ## Herschreven TIA
-Na onderzoek en wat documenteren heb ik de volledige TIA code opnieuw geschreven.
+Na onderzoek en wat documenteren heb ik de volledige TIA code opnieuw geschreven. Hij doet nu alles op color clock niveau en niet op scanline niveau
 
 ## Bugs
--  Grafische bugs bij Jungle Hunt en Stargate vermoedelijk een issue in de TIA afhandeling
+-  Trillend beeld bij Frogger
 
+# TODO
+- scaling optie toevoegen
