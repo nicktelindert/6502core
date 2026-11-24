@@ -549,14 +549,6 @@ void tia_step(TIA *tia, int color_clocks) {
         return;
     }
 
-    if (40 <= tia->scanline && tia->scanline <= 190) {
-        if (tia->grp0 != 0) {
-            tia->debug_p0_x = tia->p0_x;
-        }
-        if (tia->grp1 != 0) {
-            tia->debug_p1_x = tia->p1_x;
-        }
-    }
 
     while (tia->audio_clock >= 114) {
         tia->audio_clock -= 114;
@@ -567,13 +559,11 @@ void tia_step(TIA *tia, int color_clocks) {
 
     while (tia->clock >= 228) {
         tia_render_up_to_clock(tia, 228);
-        if (tia->wsync) {
-            tia->clock = 0;
-            tia->wsync = false;
-        } else {
-            tia->clock -= 228;
-        }
+        tia->clock = 0;
         tia->rendered_clock = 0;
         tia->scanline += 1;
+        if (tia->wsync) {
+            tia->wsync = false;
+        }
     }
 }
