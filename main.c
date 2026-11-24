@@ -420,10 +420,17 @@ int main(int argc, char **argv) {
     want.freq = (int)TIA_OUT_RATE;
     want.format = AUDIO_S16SYS;
     want.channels = 1;
-    want.samples = 1024;
+    want.samples = 512;
     SDL_AudioDeviceID audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+    static double current_fps = 60.0;
+    uint32_t max_queued_bytes  = 0;
     if (audio_dev > 0) {
         SDL_PauseAudioDevice(audio_dev, 0);
+        double max_frames = 3;
+        size_t bytes_per_sample = sizeof(int16_t) * (size_t)have.channels;
+        max_queued_bytes = (uint32_t)(
+            ((double)have.freq / current_fps) * max_frames * (double)bytes_per_sample
+        );
     }
 
     Emulator emu;
@@ -441,7 +448,6 @@ int main(int argc, char **argv) {
     overlay.show_rom_menu = false;
     overlay.selected_rom_idx = 0;
     bool uncapped = false;
-    static double current_fps = 60.0;
 
     if (argc == 2) {
         if (strcmp(argv[1], "--uncapped") == 0)  {           
@@ -532,7 +538,17 @@ int main(int argc, char **argv) {
             if (audio_dev > 0) {
                 size_t n = tia_audio_take_samples(&emu.audio, audio_tmp, 4096);
                 if (n > 0) {
-                    SDL_QueueAudio(audio_dev, audio_tmp, (uint32_t)(n * sizeof(int16_t)));
+                    uint32_t bytes_to_queue = (uint32_t)(n * sizeof(int16_t));
+                    uint32_t queued = SDL_GetQueuedAudioSize(audio_dev);
+
+                    if (queued > max_queued_bytes) {
+                        SDL_ClearQueuedAudio(audio_dev);
+                        queued = 0;
+                    }
+
+                    if (queued + bytes_to_queue <= max_queued_bytes) {
+                        SDL_QueueAudio(audio_dev, audio_tmp, bytes_to_queue);
+                    }
                 }
             }
 
