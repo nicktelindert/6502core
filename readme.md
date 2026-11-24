@@ -13,7 +13,7 @@ After researching the hardware behavior and documenting the timing details, I re
 - [x] Rewrite TIA to operate at color-clock level
 - [x] Stabilize low-latency SDL audio queue
 - [ ] Fix remaining top-scanline flicker in *Jungle Hunt* (NTSC)
-- [ ] Add window/display scaling options
+- [ ] Add window/display scaling options/ 4:3 ratio
 - [ ] Expand CRC32 database for special bankswitching and extra-RAM ROMs (F8SC, FE, E0, E7, 3F, DPC)
 - [ ] Expand Atari support (e.g., Atari 5200 / 7800)
 - [ ] Add support for additional MOS 6502-based consoles (e.g., NES)

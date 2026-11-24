@@ -294,7 +294,6 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     char header[256];
 
     draw_overlay_box(renderer, 15, 15, win_w - 30, win_h - 30, 225);
-    snprintf(header, sizeof(header), "Select a ROM from ./%s/ (Enter = Start, F2 = Close)", ov->rom_dir);
     draw_text(renderer, 25, 25, header, green, 2);
 
     if (ov->rom_count == 0) {
