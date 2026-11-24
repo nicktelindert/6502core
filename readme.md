@@ -1,15 +1,19 @@
-# Atari 2600 Emulator (C)
+# 6502core Emulator (C)
 
-Oorspronkelijk had ik het in Python gebouwd en was daar tevreden over. Qua performance zit er alleen een limiet aan als je Python gebruikt.
-Dus de boel is inmiddels omgeschreven naar C, er zitten alleen nog wat bugs in die opgelost moeten worden. Het omschrijven is nogal een taak.
+Originally, I built this project in Python and was quite happy with how it turned out. However, Python eventually hits a performance ceiling when emulating hardware at low-level cycle accuracy. Because of that—and with the goal of supporting heavier 6502-based consoles down the road—I decided to rewrite the entire codebase in C. Porting everything over is quite a task, and there are still a few bugs left to iron out, but the foundation is solid.
 
+## Architecture & Goal
+The goal of **6502core** is to provide a clean, cycle-oriented MOS 6502 CPU core (including variants like the 6507) that can drive multiple classic consoles. Right now, the focus is on the Atari lineup—starting with the Atari 2600—before expanding to other 6502-based systems.
 
+## Rewritten TIA (Color-Clock Accuracy)
+After researching the hardware behavior and documenting the timing details, I rewrote the entire TIA implementation from scratch. Instead of rendering on a per-scanline basis, it now operates at the **color-clock level**, driving video and audio directly from hardware triggers and cycle timing.
 
-## Herschreven TIA
-Na onderzoek en wat documenteren heb ik de volledige TIA code opnieuw geschreven. Hij doet nu alles op color clock niveau en niet op scanline niveau
-
-## Bugs
--  Trillend beeld bij Frogger
-
-# TODO
-- scaling optie toevoegen
+## Roadmap
+- [x] Rewrite core emulator from Python to C
+- [x] Rewrite TIA to operate at color-clock level
+- [x] Stabilize low-latency SDL audio queue
+- [ ] Fix remaining top-scanline flicker in *Jungle Hunt* (NTSC)
+- [ ] Add window/display scaling options
+- [ ] Expand CRC32 database for special bankswitching and extra-RAM ROMs (F8SC, FE, E0, E7, 3F, DPC)
+- [ ] Expand Atari support (e.g., Atari 5200 / 7800)
+- [ ] Add support for additional MOS 6502-based consoles (e.g., NES)

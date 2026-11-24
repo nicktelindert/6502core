@@ -170,7 +170,7 @@ static void emu_destroy(Emulator *emu) {
 static bool emu_load_rom(Emulator *emu, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
-        fprintf(stderr, "Kan ROM niet openen: %s\n", path);
+        fprintf(stderr, "Unable to open rom: %s\n", path);
         return false;
     }
 
@@ -276,8 +276,8 @@ static void overlay_draw_help(OverlayState *ov, SDL_Renderer *renderer, double f
     char buf[160];
 
     draw_overlay_box(renderer, 15, 15, 510, 200, 200);
-    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | ESC: Afsluiten", green, 2);
-    draw_text(renderer, 25, 55, "ASWD: Bewegen CTRL/SHIFT: action buttons", green, 2);
+    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | F3: Disable Frame limit| ESC: Quit", green, 2);
+    draw_text(renderer, 25, 55, "ASWD: Movement CTRL/SHIFT: Fire/Reset", green, 2);
 
     snprintf(buf, sizeof(buf), "FPS: %.1f", fps);
     draw_text(renderer, 25, 85, buf, green, 2);
@@ -294,11 +294,11 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     char header[256];
 
     draw_overlay_box(renderer, 15, 15, win_w - 30, win_h - 30, 225);
-    snprintf(header, sizeof(header), "Selecteer ROM uit ./%s/ (Enter = start, F2 = sluit)", ov->rom_dir);
+    snprintf(header, sizeof(header), "Select a ROM from ./%s/ (Enter = Start, F2 = Close)", ov->rom_dir);
     draw_text(renderer, 25, 25, header, green, 2);
 
     if (ov->rom_count == 0) {
-        draw_text(renderer, 25, 65, "Geen .bin / .a26 / .rom bestanden in ./roms/", warn, 2);
+        draw_text(renderer, 25, 65, "No roms found in ./roms", warn, 2);
         return;
     }
 
@@ -375,7 +375,7 @@ int main(int argc, char **argv) {
     int win_h = TIA_FB_HEIGHT * scale;
 
     SDL_Window *window = SDL_CreateWindow(
-        "Atari 2600 Emulator",
+        "6502core (Press F1 to open the menu)",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         win_w,
@@ -420,10 +420,17 @@ int main(int argc, char **argv) {
     want.freq = (int)TIA_OUT_RATE;
     want.format = AUDIO_S16SYS;
     want.channels = 1;
-    want.samples = 1024;
+    want.samples = 512;
     SDL_AudioDeviceID audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+    static double current_fps = 60.0;
+    uint32_t max_queued_bytes  = 0;
     if (audio_dev > 0) {
         SDL_PauseAudioDevice(audio_dev, 0);
+        double max_frames = 3;
+        size_t bytes_per_sample = sizeof(int16_t) * (size_t)have.channels;
+        max_queued_bytes = (uint32_t)(
+            ((double)have.freq / current_fps) * max_frames * (double)bytes_per_sample
+        );
     }
 
     Emulator emu;
@@ -441,21 +448,8 @@ int main(int argc, char **argv) {
     overlay.show_rom_menu = false;
     overlay.selected_rom_idx = 0;
     bool uncapped = false;
-    static double current_fps = 60.0;
 
-    if (argc == 2) {
-        if (strcmp(argv[1], "--uncapped") == 0)  {           
-             uncapped = true;
-        } else {
-            emu_load_rom(&emu, argv[1]);
-            overlay.show_rom_menu = false;
-        }
-    } else if (argc == 3){
-        if (strcmp(argv[2], "--uncapped") == 0)  {
-            uncapped = true;
-        } else {
-            printf ("%s is not a valid argument", argv[2]);
-        }
+    if (argc == 1) {
         emu_load_rom(&emu, argv[1]);
         overlay.show_rom_menu = false;
     }
@@ -532,7 +526,17 @@ int main(int argc, char **argv) {
             if (audio_dev > 0) {
                 size_t n = tia_audio_take_samples(&emu.audio, audio_tmp, 4096);
                 if (n > 0) {
-                    SDL_QueueAudio(audio_dev, audio_tmp, (uint32_t)(n * sizeof(int16_t)));
+                    uint32_t bytes_to_queue = (uint32_t)(n * sizeof(int16_t));
+                    uint32_t queued = SDL_GetQueuedAudioSize(audio_dev);
+
+                    if (queued > max_queued_bytes) {
+                        SDL_ClearQueuedAudio(audio_dev);
+                        queued = 0;
+                    }
+
+                    if (queued + bytes_to_queue <= max_queued_bytes) {
+                        SDL_QueueAudio(audio_dev, audio_tmp, bytes_to_queue);
+                    }
                 }
             }
 
