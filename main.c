@@ -443,7 +443,7 @@ int main(int argc, char **argv) {
     const double target_frame_ms = 1000.0 / 60.0; /* ~16.6667 ms */
     OverlayState overlay = {0};
     snprintf(overlay.rom_dir, sizeof(overlay.rom_dir), "roms");
-    overlay.show_help = true;
+    overlay.show_help = false;
     overlay.show_rom_menu = false;
     overlay.selected_rom_idx = 0;
     bool uncapped = false;
