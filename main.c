@@ -246,33 +246,6 @@ static int cmp_str(const void *a, const void *b) {
     return strcmp(sa, sb);
 }
 
-static void present_framebuffer(
-    const uint8_t *fb,
-    int fb_width,
-    int fb_height,
-    DisplayCrop crop,
-    uint8_t *out_pixels
-) {
-    for (int dst_y = 0; dst_y < crop.view_height; dst_y++) {
-        int src_y = dst_y + crop.top_crop;
-        const uint8_t *src_row;
-
-        if (src_y < 0 || src_y >= fb_height) {
-            for (int x = 0; x < fb_width; x++) {
-                out_pixels[dst_y * fb_width + x] = 0u;
-            }
-            continue;
-        }
-
-        src_row = fb + (src_y * fb_width);
-        for (int x = 0; x < fb_width; x++) {
-            out_pixels[dst_y * fb_width + x] = src_row[x];
-        }
-    }
-}
-
-
-
 static void overlay_scan_roms(OverlayState *ov) {
     for (int i = 0; i < ov->rom_count; ++i) free(ov->roms[i]);
     free(ov->roms);
@@ -304,16 +277,21 @@ static void overlay_scan_roms(OverlayState *ov) {
     }
 }
 
-static void overlay_draw_help(OverlayState *ov, SDL_Renderer *renderer, double fps) {
+static void overlay_draw_fps(SDL_Renderer *renderer, double fps, int win_w) {
     SDL_Color green = { 0, 255, 120, 255 };
     char buf[160];
+    snprintf(buf, sizeof(buf), "FPS: %.1f", fps);
+    draw_text(renderer, win_w - 150, 25, buf, green, 2);
+}
 
-    draw_overlay_box(renderer, 15, 15, 510, 200, 200);
-    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | F3: Disable Frame limit| ESC: Quit", green, 2);
+static void overlay_draw_help(OverlayState *ov, SDL_Renderer *renderer, int win_w) {
+    SDL_Color green = { 0, 255, 120, 255 };
+
+    draw_overlay_box(renderer, 15, 15, win_w - 30, 70, 225);
+    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | F3: Disable Frame limit | F4: Increase overscan | F5: Decrease overscan | ESC: Quit", green, 2);
     draw_text(renderer, 25, 55, "ASWD: Movement CTRL/SHIFT: Fire/Reset", green, 2);
 
-    snprintf(buf, sizeof(buf), "FPS: %.1f", fps);
-    draw_text(renderer, 25, 85, buf, green, 2);
+
 
     for (int i = 0; i < ov->debug_line_count && i < 8; ++i) {
         draw_text(renderer, 25, 75 + i * 20, ov->debug_lines[i], green, 2);
@@ -354,7 +332,11 @@ static void overlay_render(OverlayState *ov, SDL_Renderer *renderer, int win_w, 
     if (ov->show_rom_menu) {
         overlay_draw_rom_menu(ov, renderer, win_w, win_h);
     } else if (ov->show_help) {
-        overlay_draw_help(ov, renderer, fps);
+        overlay_draw_help(ov, renderer, win_w);
+    }
+
+    if (ov->show_help == false && ov->show_rom_menu == false) {
+        overlay_draw_fps(renderer, fps, win_w);
     }
 }
 
@@ -403,12 +385,9 @@ int main(int argc, char **argv) {
     }
 
     int scale = 6;
-    int win_w = TIA_FB_WIDTH * scale;
+    int win_w = (TIA_FB_HEIGHT / 3 * 4) * scale;
     int win_h = TIA_FB_HEIGHT * scale;
 
-    DisplayCrop cropped = {.top_crop = 2, .view_height = TIA_FB_HEIGHT - 2};
-    size_t out_size = (TIA_FB_WIDTH * TIA_FB_HEIGHT * scale);
-    uint8_t *out_pixels = malloc(out_size);
     SDL_Window *window = SDL_CreateWindow(
         "6502core (Press F1 to open the menu)",
         SDL_WINDOWPOS_CENTERED,
@@ -488,17 +467,27 @@ int main(int argc, char **argv) {
         emu_load_rom(&emu, argv[1]);
         overlay.show_rom_menu = false;
     }
-
+    
+    double overscan = 1.00;
     
     while (running) {
         uint64_t frame_start = SDL_GetPerformanceCounter();
-        
         SDL_Event ev;
 
         while (SDL_PollEvent(&ev)) {
             if (ev.type == SDL_KEYDOWN) {
                 SDL_Keycode key = ev.key.keysym.sym;
 
+                if (key == SDLK_F4) {
+                    overscan += 0.01;
+                }
+                
+                if (key == SDLK_F5) {
+                    if (overscan >  1.00) {
+                        overscan -= 0.01;
+                    }
+
+                }
 
                 if (key == SDLK_F3 && uncapped == false) {
                     uncapped = true;
@@ -576,8 +565,7 @@ int main(int argc, char **argv) {
                 }
             }
 
-            present_framebuffer(emu.tia.framebuffer, TIA_FB_WIDTH * 3, TIA_FB_HEIGHT * 3, cropped, out_pixels);
-            SDL_UpdateTexture(texture, NULL, out_pixels, (TIA_FB_WIDTH)* 3);
+            SDL_UpdateTexture(texture, NULL, emu.tia.framebuffer, TIA_FB_WIDTH * 3);
         } else {
             /* Leeg/donker scherm zolang er nog geen ROM actief is */
             uint8_t blank[TIA_FB_SIZE];
@@ -588,7 +576,16 @@ int main(int argc, char **argv) {
       
 
         SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, texture, NULL, NULL);
+        int new_height = win_h * overscan;
+        int new_width = win_h;
+
+        SDL_Rect src_rect = {0, 0, win_w, win_h};
+        SDL_Rect dst_rect = {0, 0, win_w, new_height};
+
+        dst_rect.x = 0;
+        dst_rect.y = (new_width - new_height) / 2;
+
+        SDL_RenderCopy(renderer, texture, &src_rect, &dst_rect);
         SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
         overlay_render(&overlay, renderer, win_w, win_h, current_fps);
         SDL_RenderPresent(renderer);
