@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O3 -g -Wall -Wextra -std=c11
+CFLAGS = -O0 -g -Wall -Wextra -std=c11
 LDFLAGS = -lSDL2
 
 SRCS = main.c cpu6507.c addressing.c bus.c tia.c riot.c cartridge.c audio.c

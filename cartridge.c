@@ -1,83 +1,285 @@
 #include "cartridge.h"
+#include "detectchip.c"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static const uint32_t F6SC_CRC32_LIST[] = {
-    0xEE7B80D1u, /* Another Dig Dug (USA) */
-    0xB629D904u, /* Dig Dug (USA) */
-    0xD352052Eu, /* Dig Dug (Europe) */
-    0x5A27B58Cu  /* Dig Dug (Rev 1) */
-};
+static uint8_t e7_ram[4][256];
+static int e7_lower_bank = 0;      /* 0..7 voor 2K ROM-banken, of 0..3 voor RAM-bank */
+static bool e7_lower_is_ram = false;
 
-
-static const uint32_t F8FE_CRC32_LIST[] = {
-    0xe127c012, // Robot Tank
-};
-
-static const uint32_t F8SC_CRC32_LIST[] = {
-    0xcde3530e
-};
-
-uint32_t cart_crc32(const uint8_t *data, size_t len) {
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (int b = 0; b < 8; b++) {
-            uint32_t mask = (uint32_t)-(int32_t)(crc & 1u);
-            crc = (crc >> 1) ^ (0xEDB88320u & mask);
-        }
-    }
-    return ~crc;
+static void e7_reset_state(void) {
+    memset(e7_ram, 0, sizeof(e7_ram));
+    e7_lower_bank = 0;
+    e7_lower_is_ram = false;
 }
 
-static bool is_f6sc(const uint8_t *rom_data, size_t size, uint32_t crc) {
-    if (size != 0x4000u) {
-        return false;
+static void check_hotspot_ua(Cartridge *cart, uint16_t address) {
+    if (!cart || (address & 0x1000u) == 0) {
+        return;
+    }
+    uint8_t lo = (uint8_t)(address & 0x00FFu);
+    if (lo == 0x20u) {
+        cart->current_bank = 0;
+    } else if (lo == 0x40u) {
+        cart->current_bank = 1;
+    }
+}
+
+typedef struct {
+    uint8_t tops[8];
+    uint8_t bottoms[8];
+    uint16_t counters[8];
+    uint8_t flags[8];
+    bool music_mode[3];
+    uint8_t random_number;
+    const uint8_t *display_rom; /* 2048 bytes (offset 0x2000) */
+    const uint8_t *freq_rom;    /* 255 bytes (offset 0x2800), optioneel */
+} DpcState;
+
+static DpcState dpc;
+
+static uint8_t dpc_bit_reverse(uint8_t b) {
+    b = (uint8_t)(((b & 0xF0u) >> 4) | ((b & 0x0Fu) << 4));
+    b = (uint8_t)(((b & 0xCCu) >> 2) | ((b & 0x33u) << 2));
+    b = (uint8_t)(((b & 0xAAu) >> 1) | ((b & 0x55u) << 1));
+    return b;
+}
+
+static void dpc_reset_state(const uint8_t *rom_data, size_t size) {
+    memset(&dpc, 0, sizeof(dpc));
+    dpc.random_number = 0x01u;
+    if (rom_data && size >= 0x2800u) {
+        dpc.display_rom = &rom_data[0x2000u];
+    }
+    if (rom_data && size >= 10495u) {
+        dpc.freq_rom = &rom_data[0x2800u];
+    }
+}
+
+static void dpc_clock_random(void) {
+    /* 8-bit Galois/Fibonacci LFSR zoals in DPC hardware */
+    uint8_t bit = (uint8_t)(((dpc.random_number >> 7) ^
+                             (dpc.random_number >> 5) ^
+                             (dpc.random_number >> 4) ^
+                             (dpc.random_number >> 3)) & 1u);
+    dpc.random_number = (uint8_t)((dpc.random_number << 1) | bit);
+}
+
+static void dpc_update_flag(int f) {
+    uint8_t low = (uint8_t)(dpc.counters[f] & 0x00FFu);
+    if (low == dpc.tops[f]) {
+        dpc.flags[f] = 0xFFu;
+    } else if (low == dpc.bottoms[f]) {
+        dpc.flags[f] = 0x00u;
+    }
+}
+
+static uint8_t dpc_fetch_byte(int f) {
+    if (!dpc.display_rom) {
+        return 0xFFu;
+    }
+    uint16_t idx = (uint16_t)(dpc.counters[f] & 0x07FFu);
+    uint8_t val = dpc.display_rom[idx];
+
+    /* Na elke fetch telt de 11-bit counter 1 omlaag */
+    dpc.counters[f] = (uint16_t)((dpc.counters[f] - 1u) & 0x07FFu);
+    dpc_update_flag(f);
+    return val;
+}
+
+static uint8_t read_dpc(Cartridge *cart, uint16_t address) {
+    if (!cart || !cart->rom_data) {
+        return 0xFFu;
     }
 
-    size_t num_known = sizeof(F6SC_CRC32_LIST) / sizeof(F6SC_CRC32_LIST[0]);
-    for (size_t i = 0; i < num_known; i++) {
-        if (crc == F6SC_CRC32_LIST[i]) {
-            return true;
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+
+    /* Bankswitch hotspots ($1FF8 / $1FF9) */
+    if (addr == 0x1FF8u) {
+        cart->current_bank = 0;
+        return cart->banks[cart->current_bank][addr & 0x0FFFu];
+    }
+    if (addr == 0x1FF9u) {
+        cart->current_bank = 1;
+        return cart->banks[cart->current_bank][addr & 0x0FFFu];
+    }
+
+    /* DPC Read Registers: $1000 - $103F */
+    if (addr >= 0x1000u && addr <= 0x103Fu) {
+        int reg = (int)(addr & 0x003Fu);
+        int f = reg & 0x07;
+
+        if (reg <= 0x03) {
+            /* $1000-$1003: Random number generator */
+            dpc_clock_random();
+            return dpc.random_number;
         }
-    }
-
-    for (int bank = 0; bank < 4; bank++) {
-        const uint8_t *page = &rom_data[(size_t)bank * 0x1000u];
-        uint8_t first = page[0];
-        if (first == 0x00u || first == 0xFFu) {
-            bool all_same = true;
-            for (int i = 1; i < 0x100; i++) {
-                if (page[i] != first) {
-                    all_same = false;
-                    break;
+        if (reg == 0x04) {
+            /* $1004: Sound / Music amplitude mixer (fetchers 5, 6, 7) */
+            static const uint8_t amp_table[8] = { 0, 4, 5, 9, 6, 10, 11, 15 };
+            uint8_t mask = 0;
+            for (int ch = 0; ch < 3; ch++) {
+                int df = 5 + ch;
+                if (dpc.music_mode[ch]) {
+                    /* Eenvoudige fase-benadering op basis van counter & top */
+                    if ((dpc.counters[df] & 0xFFu) > dpc.bottoms[df]) {
+                        mask |= (uint8_t)(1u << ch);
+                    }
+                } else if (dpc.flags[df]) {
+                    mask |= (uint8_t)(1u << ch);
                 }
             }
-            if (all_same) {
-                return true;
+            return amp_table[mask];
+        }
+        if (reg <= 0x07) {
+            /* $1005-$1007: Random fallback */
+            dpc_clock_random();
+            return dpc.random_number;
+        }
+        if (reg <= 0x0F) {
+            /* $1008-$100F: Data fetcher 0..7 direct */
+            return dpc_fetch_byte(f);
+        }
+        if (reg <= 0x17) {
+            /* $1010-$1017: Data fetcher 0..7 gemaskeerd met flag */
+            uint8_t data = dpc_fetch_byte(f);
+            return (uint8_t)(data & dpc.flags[f]);
+        }
+        if (reg <= 0x1F) {
+            /* $1018-$101F: Data fetcher 0..7 gemaskeerd + bit-reversed */
+            uint8_t data = dpc_fetch_byte(f);
+            return dpc_bit_reverse((uint8_t)(data & dpc.flags[f]));
+        }
+        if (reg <= 0x27) {
+            /* $1020-$1027: Data fetcher 0..7 gemaskeerd + nibble-swapped */
+            uint8_t data = dpc_fetch_byte(f);
+            uint8_t masked = (uint8_t)(data & dpc.flags[f]);
+            return (uint8_t)(((masked & 0x0Fu) << 4) | ((masked & 0xF0u) >> 4));
+        }
+        if (reg <= 0x2F) {
+            /* $1028-$102F: Data fetcher 0..7 gemaskeerd + shift right */
+            uint8_t data = dpc_fetch_byte(f);
+            return (uint8_t)((data & dpc.flags[f]) >> 1);
+        }
+        if (reg <= 0x37) {
+            /* $1030-$1037: Data fetcher 0..7 gemaskeerd + shift left */
+            uint8_t data = dpc_fetch_byte(f);
+            return (uint8_t)((data & dpc.flags[f]) << 1);
+        }
+        /* $1038-$103F: Flag register van data fetcher 0..7 */
+        return dpc.flags[f];
+    }
+
+    return cart->banks[cart->current_bank][addr & 0x0FFFu];
+}
+
+static void write_dpc(Cartridge *cart, uint16_t address, uint8_t value) {
+    if (!cart) {
+        return;
+    }
+
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+
+    if (addr == 0x1FF8u) {
+        cart->current_bank = 0;
+        return;
+    }
+    if (addr == 0x1FF9u) {
+        cart->current_bank = 1;
+        return;
+    }
+
+    /* DPC Write Registers: $1040 - $107F */
+    if (addr >= 0x1040u && addr <= 0x107Fu) {
+        int reg = (int)(addr - 0x1040u);
+        int f = reg & 0x07;
+
+        if (reg <= 0x07) {
+            /* $1040-$1047: Top register */
+            dpc.tops[f] = value;
+            dpc.flags[f] = 0x00u;
+        } else if (reg <= 0x0F) {
+            /* $1048-$104F: Bottom register */
+            dpc.bottoms[f] = value;
+        } else if (reg <= 0x17) {
+            /* $1050-$1057: Counter low byte */
+            dpc.counters[f] = (uint16_t)((dpc.counters[f] & 0x0700u) | value);
+            dpc_update_flag(f);
+        } else if (reg <= 0x1F) {
+            /* $1058-$105F: Counter high 3 bits (en music mode voor fetchers 5..7) */
+            dpc.counters[f] = (uint16_t)((dpc.counters[f] & 0x00FFu) | (((uint16_t)value & 0x07u) << 8));
+            if (f >= 5) {
+                dpc.music_mode[f - 5] = (value & 0x10u) != 0;
             }
+            dpc_update_flag(f);
+        } else if (reg >= 0x30 && reg <= 0x37) {
+            /* $1070-$1077: Reset random number generator */
+            dpc.random_number = 0x01u;
         }
     }
-
-    return false;
 }
 
-static bool is_f8sc(size_t size, uint32_t crc) {
-    if (size != 0x2000u) {
-        return false;
+
+
+static uint8_t read_ua(Cartridge *cart, uint16_t address) {
+    check_hotspot_ua(cart, address);
+    if (!cart || cart->current_bank < 0 || cart->current_bank >= cart->num_banks) {
+        return 0xFFu;
+    }
+    return cart->banks[cart->current_bank][address & 0x0FFFu];
+}
+
+static void write_ua(Cartridge *cart, uint16_t address, uint8_t value) {
+    (void)value;
+    check_hotspot_ua(cart, address);
+}
+
+static void check_hotspot_e7(uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1FE0u && addr <= 0x1FE7u) {
+        e7_lower_is_ram = false;
+        e7_lower_bank = (int)(addr - 0x1FE0u);
+    } else if (addr >= 0x1FE8u && addr <= 0x1FEBu) {
+        e7_lower_is_ram = true;
+        e7_lower_bank = (int)(addr - 0x1FE8u);
+    }
+}
+
+static uint8_t read_e7(Cartridge *cart, uint16_t address) {
+    check_hotspot_e7(address);
+    if (!cart || !cart->rom_data || cart->rom_size < 0x4000u) {
+        return 0xFFu;
     }
 
-    size_t num_known = sizeof(F8SC_CRC32_LIST) / sizeof(F8SC_CRC32_LIST[0]);
-    for (size_t i = 0; i < num_known; i++) {
-        if (crc == F8SC_CRC32_LIST[i]) {
-            return true;
+    uint16_t addr = (uint16_t)(address & 0x0FFFu);
+    /* Bovenste 2K ($1800-$1FFF): vaste laatste 2K bank (offset 0x3800) */
+    if (addr >= 0x0800u) {
+        return cart->rom_data[0x3800u + (addr - 0x0800u)];
+    }
+
+    /* Onderste 2K ($1000-$17FF): RAM-leesvenster ($1400-$17FF) of geschakelde 2K ROM-bank */
+    if (e7_lower_is_ram) {
+        if (addr >= 0x0400u) {
+            return e7_ram[e7_lower_bank & 3][addr & 0x00FFu];
         }
+        return 0xFFu;
     }
 
-    return false;
+    size_t bank_offset = (size_t)(e7_lower_bank & 7) * 0x0800u;
+    return cart->rom_data[bank_offset + addr];
 }
 
+static void write_e7(Cartridge *cart, uint16_t address, uint8_t value) {
+    (void)cart;
+    check_hotspot_e7(address);
+
+    uint16_t addr = (uint16_t)(address & 0x0FFFu);
+    /* Onderste 1K van het 2K-venster ($1000-$13FF) is het RAM-schrijfvenster */
+    if (e7_lower_is_ram && addr < 0x0400u) {
+        e7_ram[e7_lower_bank & 3][addr & 0x00FFu] = value;
+    }
+}
 
 static uint8_t read_2k4k(Cartridge *cart, uint16_t address) {
     return cart->rom_data[address & cart->mask];
@@ -98,17 +300,14 @@ static void check_hotspot_f8(Cartridge *cart, uint16_t address) {
     }
 }
 
-
 static uint8_t read_f8(Cartridge *cart, uint16_t address) {
     check_hotspot_f8(cart, address);
-    
     return cart->banks[cart->current_bank][address & 0x0FFFu];
 }
 
 static void write_f8(Cartridge *cart, uint16_t address, uint8_t value) {
     (void)value;
     check_hotspot_f8(cart, address);
-    
 }
 
 static void check_hotspot_f6(Cartridge *cart, uint16_t address) {
@@ -135,12 +334,120 @@ static void write_f6(Cartridge *cart, uint16_t address, uint8_t value) {
     check_hotspot_f6(cart, address);
 }
 
+static void check_hotspot_f4(Cartridge *cart, uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1FF4u && addr <= 0x1FFBu) {
+        cart->current_bank = (int)(addr - 0x1FF4u);
+    }
+}
+
+static uint8_t read_f4(Cartridge *cart, uint16_t address) {
+    check_hotspot_f4(cart, address);
+    if (!cart || cart->current_bank < 0 || cart->current_bank >= cart->num_banks) {
+        return 0xFFu;
+    }
+    return cart->banks[cart->current_bank][address & 0x0FFFu];
+}
+
+static void write_f4(Cartridge *cart, uint16_t address, uint8_t value) {
+    (void)value;
+    check_hotspot_f4(cart, address);
+}
+
+static void check_hotspot_ef(Cartridge *cart, uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1FE0u && addr <= 0x1FEFu) {
+        cart->current_bank = (int)(addr - 0x1FE0u);
+    }
+}
+
+static uint8_t read_ef(Cartridge *cart, uint16_t address) {
+    check_hotspot_ef(cart, address);
+    if (!cart || cart->current_bank < 0 || cart->current_bank >= cart->num_banks) {
+        return 0xFFu;
+    }
+    return cart->banks[cart->current_bank][address & 0x0FFFu];
+}
+
+static void write_ef(Cartridge *cart, uint16_t address, uint8_t value) {
+    (void)value;
+    check_hotspot_ef(cart, address);
+}
+
+static void check_hotspot_3f(Cartridge *cart, uint16_t address, uint8_t value) {
+    if ((address & 0x003Fu) == 0x003Fu && cart->num_banks > 0) {
+        cart->current_bank = (int)(value % (uint8_t)cart->num_banks);
+    }
+}
+
+static uint8_t read_3f(Cartridge *cart, uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x0FFFu);
+    if (addr >= 0x0800u && cart->rom_size >= 0x0800u) {
+        return cart->rom_data[(cart->rom_size - 0x0800u) + (addr - 0x0800u)];
+    }
+    return cart->banks[cart->current_bank][addr & 0x07FFu];
+}
+
+static void write_3f(Cartridge *cart, uint16_t address, uint8_t value) {
+    check_hotspot_3f(cart, address, value);
+}
+
+static void check_hotspot_e0(Cartridge *cart, uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1FE0u && addr <= 0x1FE7u) {
+        size_t slice = (size_t)(addr - 0x1FE0u);
+        cart->banks[0] = &cart->rom_data[slice * 0x0400u];
+    } else if (addr >= 0x1FE8u && addr <= 0x1FEFu) {
+        size_t slice = (size_t)(addr - 0x1FE8u);
+        cart->banks[1] = &cart->rom_data[slice * 0x0400u];
+    } else if (addr >= 0x1FF0u && addr <= 0x1FF7u) {
+        size_t slice = (size_t)(addr - 0x1FF0u);
+        cart->banks[2] = &cart->rom_data[slice * 0x0400u];
+    }
+}
+
+static uint8_t read_e0(Cartridge *cart, uint16_t address) {
+    check_hotspot_e0(cart, address);
+    uint16_t addr = (uint16_t)(address & 0x0FFFu);
+    size_t slot = (size_t)(addr >> 10);
+    return cart->banks[slot][addr & 0x03FFu];
+}
+
+static void write_e0(Cartridge *cart, uint16_t address, uint8_t value) {
+    (void)value;
+    check_hotspot_e0(cart, address);
+}
+
+static void check_hotspot_fa(Cartridge *cart, uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1FF8u && addr <= 0x1FFAu) {
+        cart->current_bank = (int)(addr - 0x1FF8u);
+    }
+}
+
+static uint8_t read_fa(Cartridge *cart, uint16_t address) {
+    check_hotspot_fa(cart, address);
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1100u && addr <= 0x11FFu) {
+        return cart->superchip_ram[addr & 0x00FFu];
+    }
+    return cart->banks[cart->current_bank][address & 0x0FFFu];
+}
+
+static void write_fa(Cartridge *cart, uint16_t address, uint8_t value) {
+    check_hotspot_fa(cart, address);
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1000u && addr <= 0x10FFu) {
+        cart->superchip_ram[addr & 0x00FFu] = value;
+    }
+}
+
 static uint8_t read_f6sc(Cartridge *cart, uint16_t address) {
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     if (addr >= 0x1080u && addr <= 0x10FFu) {
         return cart->superchip_ram[addr & 0x007Fu];
     }
-    return read_f6(cart, addr);
+    return read_f6(cart, address);
 }
 
 static uint8_t read_f8sc(Cartridge *cart, uint16_t address) {
@@ -148,17 +455,17 @@ static uint8_t read_f8sc(Cartridge *cart, uint16_t address) {
     if (addr >= 0x1080u && addr <= 0x10FFu) {
         return cart->superchip_ram[addr & 0x007Fu];
     }
-    return read_f8(cart, addr);
+    return read_f8(cart, address);
 }
 
-static void write_f8sc(Cartridge *cart, uint16_t address, uint8_t value)  {
+static void write_f8sc(Cartridge *cart, uint16_t address, uint8_t value) {
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     if (addr >= 0x1000u && addr <= 0x107Fu) {
         cart->superchip_ram[addr & 0x007Fu] = value;
+        return;
     }
-    return write_f8(cart, addr, value);
+    write_f8(cart, address, value);
 }
-
 
 static void write_f6sc(Cartridge *cart, uint16_t address, uint8_t value) {
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
@@ -166,7 +473,7 @@ static void write_f6sc(Cartridge *cart, uint16_t address, uint8_t value) {
         cart->superchip_ram[addr & 0x007Fu] = value;
         return;
     }
-    write_f6(cart, addr, value);
+    write_f6(cart, address, value);
 }
 
 void cart_fe_on_byte(Cartridge *cart, uint8_t val) {
@@ -181,8 +488,7 @@ void cart_fe_on_rts_hi(Cartridge *cart, uint8_t hi) {
 }
 
 uint8_t read_fe(Cartridge *cart, uint16_t addr) {
-    uint8_t val = cart->banks[cart->current_bank][addr & 0x0FFFu];
-    return val;
+    return cart->banks[cart->current_bank][addr & 0x0FFFu];
 }
 
 void write_fe(Cartridge *cart, uint16_t addr, uint8_t val) {
@@ -193,73 +499,18 @@ void write_fe(Cartridge *cart, uint16_t addr, uint8_t val) {
     }
 }
 
-bool is_f8fe (size_t size, uint32_t crc) {    
-    if (size != 0x2000u) {
-        return false;
-    }
-
-    size_t num_known = sizeof(F8FE_CRC32_LIST) / sizeof(F8FE_CRC32_LIST[0]);
-    for (size_t i = 0; i < num_known; i++) {
-        if (crc == F8FE_CRC32_LIST[i]) {
-            return true;
-        }
-    }
-
-    return false;
-
-}
-
 bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size, const char *name) {
     if (!cart || !rom_data || size == 0) {
         return false;
     }
 
-    memset(cart, 0, sizeof(*cart));
-
-    if (size <= 0x1000u) {
-        cart->type = CART_TYPE_2K4K;
-        cart->mask = (size <= 0x0800u) ? 0x07FFu : 0x0FFFu;
-        cart->read = read_2k4k;
-        cart->write = write_noop;
-    } else if (size == 0x2000u) {
-        cart->crc32 = cart_crc32(rom_data, size);
-        if (is_f8fe(size, cart->crc32)) {
-            cart->type = CART_TYPE_FE;
-            cart->num_banks = 2;
-            cart->read = read_fe;
-            cart->write = write_fe;
-        } else if(is_f8sc(size, cart->crc32)) {
-            cart->type = CART_TYPE_F8SC;
-            cart->num_banks = 2;
-            cart->has_superchip_ram = true;
-            cart->read = read_f8sc;
-            cart->write = write_f8sc;
-        }
-        
-        else {
-            cart->type = CART_TYPE_F8;
-            cart->num_banks = 2;
-            cart->read = read_f8;
-            cart->write = write_f8;
-        }
-
-    } else if (size == 0x4000u) {
-        cart->crc32 = cart_crc32(rom_data, size);
-        if (is_f6sc(rom_data, size, cart->crc32)) {
-            cart->type = CART_TYPE_F6SC;
-            cart->has_superchip_ram = true;
-            cart->read = read_f6sc;
-            cart->write = write_f6sc;
-        } else {
-            cart->type = CART_TYPE_F6;
-            cart->read = read_f6;
-            cart->write = write_f6;
-        }
-        cart->num_banks = 4;
-    } else {
+    if (size > 0x10000u) {
         fprintf(stderr, "Niet-ondersteunde ROM-grootte: %zu bytes\n", size);
         return false;
     }
+
+    memset(cart, 0, sizeof(*cart));
+    e7_reset_state();
 
     cart->rom_data = (uint8_t *)malloc(size);
     if (!cart->rom_data) {
@@ -268,48 +519,152 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
     memcpy(cart->rom_data, rom_data, size);
     cart->rom_size = size;
 
-    if (cart->crc32 == 0) {
-        cart->crc32 = cart_crc32(cart->rom_data, size);
+    cart->type = detect_cart_type(cart->rom_data, size);
+
+    switch (cart->type) {
+        case CART_TYPE_2K:
+        case CART_TYPE_4K:
+        case CART_TYPE_CV:
+            cart->mask = (size <= 0x0800u) ? 0x07FFu : 0x0FFFu;
+            cart->read = read_2k4k;
+            cart->write = write_noop;
+            break;
+
+        case CART_TYPE_FE:
+            cart->num_banks = 2;
+            cart->banks[0] = &cart->rom_data[0x0000u];
+            cart->banks[1] = &cart->rom_data[0x1000u];
+            cart->read = read_fe;
+            cart->write = write_fe;
+            {
+                uint16_t vec0 = (uint16_t)(cart->banks[0][0xFFCu] | ((uint16_t)cart->banks[0][0xFFDu] << 8));
+                cart->current_bank = (vec0 & 0x1000u) ? 0 : 1;
+            }
+            break;
+
+        case CART_TYPE_UA:
+            cart->num_banks = 2;
+            cart->banks[0] = &cart->rom_data[0x0000u];
+            cart->banks[1] = &cart->rom_data[0x1000u];
+            cart->read = read_ua;
+            cart->write = write_ua;
+            cart->current_bank = 1;
+            break;
+
+        case CART_TYPE_E7:
+            cart->num_banks = 8;
+            cart->read = read_e7;
+            cart->write = write_e7;
+            e7_lower_is_ram = false;
+            e7_lower_bank = 0;
+            break;
+
+        case CART_TYPE_3F:
+            cart->num_banks = (int)(size / 0x0800u);
+            for (int b = 0; b < cart->num_banks && b < 16; b++) {
+                cart->banks[b] = &cart->rom_data[(size_t)b * 0x0800u];
+            }
+            cart->current_bank = 0;
+            cart->read = read_3f;
+            cart->write = write_3f;
+            break;
+
+        case CART_TYPE_E0:
+            cart->num_banks = 8;
+            cart->banks[0] = &cart->rom_data[0x0000u];
+            cart->banks[1] = &cart->rom_data[0x0400u];
+            cart->banks[2] = &cart->rom_data[0x0800u];
+            cart->banks[3] = &cart->rom_data[0x1C00u];
+            cart->read = read_e0;
+            cart->write = write_e0;
+            break;
+
+        case CART_TYPE_FA:
+            cart->num_banks = 3;
+            cart->has_superchip_ram = true;
+            cart->banks[0] = &cart->rom_data[0x0000u];
+            cart->banks[1] = &cart->rom_data[0x1000u];
+            cart->banks[2] = &cart->rom_data[0x2000u];
+            cart->read = read_fa;
+            cart->write = write_fa;
+            break;
+
+        case CART_TYPE_F8SC:
+            cart->has_superchip_ram = true;
+            /* fallthrough */
+        case CART_TYPE_F8:
+            cart->num_banks = 2;
+            cart->banks[0] = &cart->rom_data[0x0000u];
+            cart->banks[1] = &cart->rom_data[0x1000u];
+            cart->read = cart->has_superchip_ram ? read_f8sc : read_f8;
+            cart->write = cart->has_superchip_ram ? write_f8sc : write_f8;
+            {
+                uint16_t vec0 = (uint16_t)(cart->banks[0][0xFFCu] | ((uint16_t)cart->banks[0][0xFFDu] << 8));
+                cart->current_bank = (vec0 & 0x1000u) ? 0 : 1;
+            }
+            break;
+        case CART_TYPE_DPC:
+            cart->num_banks = 2;
+            cart->banks[0] = &cart->rom_data[0x0000u];
+            cart->banks[1] = &cart->rom_data[0x1000u];
+            cart->current_bank = 1; /* Pitfall II start in bank 1 */
+            cart->read = read_dpc;
+            cart->write = write_dpc;
+            dpc_reset_state(cart->rom_data, size);
+            break;
+        case CART_TYPE_F6SC:
+            cart->has_superchip_ram = true;
+            /* fallthrough */
+        case CART_TYPE_F6:
+            cart->num_banks = 4;
+            cart->read = cart->has_superchip_ram ? read_f6sc : read_f6;
+            cart->write = cart->has_superchip_ram ? write_f6sc : write_f6;
+            for (int b = 0; b < 4; b++) {
+                cart->banks[b] = &cart->rom_data[(size_t)b * 0x1000u];
+            }
+            cart->current_bank = 0;
+            for (int b = 0; b < 4; b++) {
+                uint16_t vec = (uint16_t)(cart->banks[b][0xFFCu] | ((uint16_t)cart->banks[b][0xFFDu] << 8));
+                if (vec & 0x1000u) {
+                    cart->current_bank = b;
+                    break;
+                }
+            }
+            break;
+
+        case CART_TYPE_F4SC:
+            cart->has_superchip_ram = true;
+            /* fallthrough */
+        case CART_TYPE_F4:
+            cart->num_banks = 8;
+            cart->read = read_f4;
+            cart->write = write_f4;
+            for (int b = 0; b < 8; b++) {
+                cart->banks[b] = &cart->rom_data[(size_t)b * 0x1000u];
+            }
+            cart->current_bank = 7;
+            break;
+        case CART_TYPE_EF:
+            cart->num_banks = 16;
+            cart->read = read_ef;
+            cart->write = write_ef;
+            for (int b = 0; b < 16 && ((size_t)b + 1u) * 0x1000u <= size; b++) {
+                cart->banks[b] = &cart->rom_data[(size_t)b * 0x1000u];
+            }
+            cart->current_bank = 0;
+            break;
+
+        default:
+            /* Nog niet geïmplementeerde Stella-types: veilige 2K/4K fallback */
+            cart->type = CART_TYPE_4K;
+            cart->mask = (size <= 0x0800u) ? 0x07FFu : 0x0FFFu;
+            cart->read = read_2k4k;
+            cart->write = write_noop;
+            break;    
     }
 
     const char *base_name = (name && name[0] != '\0') ? name : "Unknown";
-    if (cart->type == CART_TYPE_F8) {
-        snprintf(cart->name, sizeof(cart->name), "%s 8K 0x%08X", base_name, cart->crc32);
-    } else if (cart->type == CART_TYPE_F6SC) {
-        snprintf(cart->name, sizeof(cart->name), "%s 16K SC 0x%08X", base_name, cart->crc32);
-    } else if (cart->type == CART_TYPE_F6) {
-        snprintf(cart->name, sizeof(cart->name), "%s 16K 0x%08X", base_name, cart->crc32);
-    } else {
-        snprintf(cart->name, sizeof(cart->name), "%s 0x%08X", base_name, cart->crc32);
-    }
-
-    if (cart->type == CART_TYPE_F8 || cart->type == CART_TYPE_F8SC) {
-        cart->banks[0] = &cart->rom_data[0x0000u];
-        cart->banks[1] = &cart->rom_data[0x1000u];
-        uint16_t vec0 = (uint16_t)(cart->banks[0][0xFFCu] | ((uint16_t)cart->banks[0][0xFFDu] << 8));
-        cart->current_bank = (vec0 & 0x1000u) ? 0 : 1;
-    } else if (cart->type == CART_TYPE_F6 || cart->type == CART_TYPE_F6SC) {
-        for (int b = 0; b < 4; b++) {
-            cart->banks[b] = &cart->rom_data[(size_t)b * 0x1000u];
-        }
-        cart->current_bank = 0;
-        for (int b = 0; b < 4; b++) {
-            uint16_t vec = (uint16_t)(cart->banks[b][0xFFCu] | ((uint16_t)cart->banks[b][0xFFDu] << 8));
-            if (vec & 0x1000u) {
-                cart->current_bank = b;
-                break;
-            }
-        }
-    }
-
-    if (cart->type == CART_TYPE_FE) {
-        cart->num_banks = 2;
-        cart->banks[0] = &cart->rom_data[0x0000];
-        cart->banks[1] = &cart->rom_data[0x1000];
-        // Startbank op basis van reset-vector ($1FFC/$1FFD)
-        uint16_t vec0 = (uint16_t)(cart->banks[0][0xFFCu] | ((uint16_t)cart->banks[0][0xFFDu] << 8));
-        cart->current_bank = (vec0 & 0x1000u) ? 0 : 1;
-    }
+    snprintf(cart->name, sizeof(cart->name), "%s (type %d)", base_name, (int)cart->type);
 
     return true;
 }

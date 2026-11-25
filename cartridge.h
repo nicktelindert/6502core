@@ -4,15 +4,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "detectchip.h"
 
-typedef enum {
-    CART_TYPE_2K4K = 0,
-    CART_TYPE_F8,
-    CART_TYPE_F6,
-    CART_TYPE_F6SC,
-    CART_TYPE_FE,
-    CART_TYPE_F8SC
-} CartType;
+
 
 typedef struct Cartridge Cartridge;
 
