@@ -8,12 +8,16 @@ The goal of **6502core** is to provide a clean, cycle-oriented MOS 6502 CPU core
 ## Rewritten TIA (Color-Clock Accuracy)
 After researching the hardware behavior and documenting the timing details, I rewrote the entire TIA implementation from scratch. Instead of rendering on a per-scanline basis, it now operates at the **color-clock level**, driving video and audio directly from hardware triggers and cycle timing.
 
+
+## Bugs
+- [] Donkey Kong Jr start rendering way too late
+
 ## Roadmap
 - [x] Rewrite core emulator from Python to C
 - [x] Rewrite TIA to operate at color-clock level
 - [x] Stabilize low-latency SDL audio queue
 - [x] Fix remaining top-scanline flicker in *Jungle Hunt* (NTSC)
-- [ ] Add window/display scaling options/ 4:3 ratio
+- [x] Set rendering to 4:3 ratio and add overscan option(only height)
 - [ ] Add DPC support
 - [ ] Expand CRC32 database for special bankswitching and extra-RAM ROMs (F8SC, FE, E0, E7, 3F, DPC)
 - [ ] Expand Atari support (e.g., Atari 5200 / 7800)
