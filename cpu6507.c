@@ -97,9 +97,10 @@ static void branch_if(CPU6507 *cpu, bool condition, uint16_t addr) {
     if (condition) {
         uint16_t old_pc = cpu->PC;
         cpu->PC = addr;
-        bus_tick(cpu->bus, 1);
+        cpu->extra_cycles = 1;
+
         if ((old_pc & 0xFF00u) != (cpu->PC & 0xFF00u)) {
-            bus_tick(cpu->bus, 1);
+            cpu->page_crossed = true;
         }
     }
 }
@@ -115,14 +116,12 @@ static void instr_BVS(CPU6507 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_fla
 
 static void instr_DEC(CPU6507 *cpu, uint16_t addr) {
     uint8_t val = (uint8_t)(cpu_read_mem(cpu, addr) - 1u);
-    bus_tick(cpu->bus, 1);
     cpu_write_mem(cpu, addr, val);
     cpu_update_zn(cpu, val);
 }
 
 static void instr_INC(CPU6507 *cpu, uint16_t addr) {
     uint8_t val = (uint8_t)(cpu_read_mem(cpu, addr) + 1u);
-    bus_tick(cpu->bus, 1);
     cpu_write_mem(cpu, addr, val);
     cpu_update_zn(cpu, val);
 }
@@ -135,7 +134,6 @@ static void instr_PHP(CPU6507 *cpu, uint16_t addr) {
 
 static void instr_PLP(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
-    bus_tick(cpu->bus, 1);
     uint8_t st = cpu_pull_byte(cpu);
     cpu->status = (uint8_t)((st & ~(CPU_FLAG_B | CPU_FLAG_U)) | CPU_FLAG_U);
 }
@@ -144,7 +142,6 @@ static void instr_PHA(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_push_byte(c
 
 static void instr_PLA(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
-    bus_tick(cpu->bus, 1);
     cpu->A = cpu_pull_byte(cpu);
     cpu_update_zn(cpu, cpu->A);
 }
@@ -171,7 +168,6 @@ static void instr_RTI(CPU6507 *cpu, uint16_t addr) {
 
 static void instr_JSR(CPU6507 *cpu, uint16_t addr) {
     uint16_t ret = (uint16_t)(cpu->PC - 1u);
-    bus_tick(cpu->bus, 1);
     cpu_push_byte(cpu, (uint8_t)((ret >> 8) & 0xFFu));
     cpu_push_byte(cpu, (uint8_t)(ret & 0xFFu));
     if (cpu->bus && cpu->bus->cart) {
@@ -187,7 +183,6 @@ static void instr_RTS(CPU6507 *cpu, uint16_t addr) {
     if (cpu->bus && cpu->bus->cart) {
         cart_fe_on_rts_hi(cpu->bus->cart, hi);
     }
-    bus_tick(cpu->bus, 2);
     cpu->PC = (uint16_t)((((uint16_t)hi << 8) | lo) + 1u);
 }
 
@@ -200,7 +195,6 @@ static void instr_ASL(CPU6507 *cpu, uint16_t addr) {
     if (is_acc) {
         cpu->A = res;
     } else {
-        bus_tick(cpu->bus, 1);
         cpu_write_mem(cpu, addr, res);
     }
 }
@@ -214,7 +208,6 @@ static void instr_LSR(CPU6507 *cpu, uint16_t addr) {
     if (is_acc) {
         cpu->A = res;
     } else {
-        bus_tick(cpu->bus, 1);
         cpu_write_mem(cpu, addr, res);
     }
 }
@@ -229,7 +222,6 @@ static void instr_ROL(CPU6507 *cpu, uint16_t addr) {
     if (is_acc) {
         cpu->A = res;
     } else {
-        bus_tick(cpu->bus, 1);
         cpu_write_mem(cpu, addr, res);
     }
 }
@@ -244,7 +236,6 @@ static void instr_ROR(CPU6507 *cpu, uint16_t addr) {
     if (is_acc) {
         cpu->A = res;
     } else {
-        bus_tick(cpu->bus, 1);
         cpu_write_mem(cpu, addr, res);
     }
 }
@@ -399,14 +390,14 @@ static void build_opcode_table(CPU6507 *cpu) {
     set_op(cpu, 0x2C, instr_BIT, mode_ABS, 4, false);
 
     /* Branches */
-    set_op(cpu, 0x10, instr_BPL, mode_REL, 2, false);
-    set_op(cpu, 0x30, instr_BMI, mode_REL, 2, false);
-    set_op(cpu, 0x50, instr_BVC, mode_REL, 2, false);
-    set_op(cpu, 0x70, instr_BVS, mode_REL, 2, false);
-    set_op(cpu, 0x90, instr_BCC, mode_REL, 2, false);
-    set_op(cpu, 0xB0, instr_BCS, mode_REL, 2, false);
-    set_op(cpu, 0xD0, instr_BNE, mode_REL, 2, false);
-    set_op(cpu, 0xF0, instr_BEQ, mode_REL, 2, false);
+    set_op(cpu, 0x10, instr_BPL, mode_REL, 2, true);
+    set_op(cpu, 0x30, instr_BMI, mode_REL, 2, true);
+    set_op(cpu, 0x50, instr_BVC, mode_REL, 2, true);
+    set_op(cpu, 0x70, instr_BVS, mode_REL, 2, true);
+    set_op(cpu, 0x90, instr_BCC, mode_REL, 2, true);
+    set_op(cpu, 0xB0, instr_BCS, mode_REL, 2, true);
+    set_op(cpu, 0xD0, instr_BNE, mode_REL, 2, true);
+    set_op(cpu, 0xF0, instr_BEQ, mode_REL, 2, true);
 
     /* BRK / RTI / RTS / JSR / JMP */
     set_op(cpu, 0x00, instr_BRK, mode_IMP, 7, false);
@@ -600,17 +591,18 @@ void cpu_reset(CPU6507 *cpu) {
 }
 
 int cpu_step(CPU6507 *cpu) {
-    bus_reset_cycles_this_step(cpu->bus);
     cpu->extra_cycles = 0;
     cpu->page_crossed = false;
+    bus_reset_cycles_this_step(cpu->bus);
 
     uint16_t op_pc = cpu->PC;
     cpu->hist[cpu->hist_idx++] = op_pc;
 
     uint8_t opcode = cpu_fetch_u8(cpu);
     OpcodeEntry entry = cpu->opcodes[opcode];
+
     uint16_t target_addr = entry.mode(cpu);
     entry.exec(cpu, target_addr);
 
-    return bus_get_cycles_this_step(cpu->bus);
+    return 0;
 }
