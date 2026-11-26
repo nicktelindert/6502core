@@ -39,14 +39,15 @@ static int hm_offset(uint8_t reg_val) {
 
 static NusizLayout get_nusiz_layout(uint8_t nusiz) {
     uint8_t mode = nusiz & 0x07u;
+
     switch (mode) {
-        case 1u: return (NusizLayout){1, {0, 16, 0}, 2};
-        case 2u: return (NusizLayout){1, {0, 32, 0}, 2};
-        case 3u: return (NusizLayout){1, {0, 16, 32}, 3};
-        case 4u: return (NusizLayout){1, {0, 64, 0}, 2};
-        case 5u: return (NusizLayout){2, {0, 0, 0}, 1};
-        case 6u: return (NusizLayout){1, {0, 32, 64}, 3};
-        case 7u: return (NusizLayout){4, {0, 0, 0}, 1};
+        case 1u: return (NusizLayout){2, {0, 16, 0}, 1};
+        case 2u: return (NusizLayout){2, {0, 32, 0}, 1};
+        case 3u: return (NusizLayout){3, {0, 16, 32}, 1};
+        case 4u: return (NusizLayout){2, {0, 64, 0}, 1};
+        case 5u: return (NusizLayout){1, {0, 0, 0}, 1};
+        case 6u: return (NusizLayout){3, {0, 32, 64}, 1};
+        case 7u: return (NusizLayout){3, {0, 0, 0}, 1};
         default: return (NusizLayout){1, {0, 0, 0}, 1};
     }
 }
@@ -354,8 +355,8 @@ static void tia_render_pixel(TIA *tia, int clk) {
     NusizLayout lay0 = get_nusiz_layout(tia->nusiz0);
     NusizLayout lay1 = get_nusiz_layout(tia->nusiz1);
 
-    int p0_scale = lay0.scale;
-    int p1_scale = lay1.scale;
+    int p0_scale = 1 << ((tia->nusiz0 >> 5) & 0x03);
+    int p1_scale = 1 << ((tia->nusiz1 >> 5) & 0x03);
     int p0_w = 8 * p0_scale;
     int p1_w = 8 * p1_scale;
     bool refp0 = (tia->refp0 & 0x08u) != 0;
@@ -426,23 +427,17 @@ static void tia_render_pixel(TIA *tia, int clk) {
 
     bool m0_on = false;
     if (m0_en) {
-        for (int k = 0; k < lay0.num_offsets; k++) {
-            int dx = x - (m0_x + lay0.offsets[k]);
-            if (0 <= dx && dx < m0_w) {
-                m0_on = true;
-                break;
-            }
+        int dx = x - m0_x;
+        if (0 <= dx && dx < m0_w) {
+            m0_on = true;
         }
     }
 
     bool m1_on = false;
     if (m1_en) {
-        for (int k = 0; k < lay1.num_offsets; k++) {
-            int dx = x - (m1_x + lay1.offsets[k]);
-            if (0 <= dx && dx < m1_w) {
-                m1_on = true;
-                break;
-            }
+        int dx = x - m1_x;
+        if (0 <= dx && dx < m1_w) {
+            m1_on = true;
         }
     }
 
@@ -481,7 +476,9 @@ static void tia_render_pixel(TIA *tia, int clk) {
         }
     }
 
-    uint8_t pfc = pf_score ? ((x < 80) ? colup0 : colup1) : colupf;
+    uint8_t pfc = pf_score
+    ? ((x < 80) ? colup0 : colup1)
+    : colupf;
     uint8_t c;
     if (pf_prio) {
         if (pf_on || bl_on) c = pfc;
