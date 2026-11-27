@@ -24,11 +24,6 @@ void cpu_set_page_crossed(CPU6507 *cpu, bool crossed) {
 /* --- Interne CPU-helpers --- */
 
 static void cpu_write_mem(CPU6507 *cpu, uint16_t address, uint8_t value) {
-    if (address < 0x0080u &&
-        ((address & 0x3Fu) == 0x10u || (address & 0x3Fu) == 0x11u)) {
-        fprintf(stderr, "TIA RESP write: PC=%04X addr=%04X value=%02X\n",
-                cpu->PC, address, value);
-    }
     bus_write(cpu->bus, address, value);
 }
 
