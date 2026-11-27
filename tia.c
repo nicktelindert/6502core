@@ -538,14 +538,6 @@ void tia_tick_clock(TIA *tia) {
                 tia_audio_flush_frame(tia->audio);
             }
             tia->scanline = 0;
-        } else if (tia->scanline >= 512) {
-            /* Failsafe als VSYNC uitblijft (bijv. in afwijkende opstart-/DPC-lussen) */
-            tia->frame_ready = true;
-            if (tia->audio) {
-                tia_audio_flush_frame(tia->audio);
-            }
-            tia->scanline = 0;
-            tia->y = 0;
         }
         
         tia->prev_vsync_on = tia->vsync_on;
