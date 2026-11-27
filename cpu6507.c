@@ -94,13 +94,23 @@ static void instr_INX(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->X = (uint8
 static void instr_INY(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->Y = (uint8_t)(cpu->Y + 1u); cpu_update_zn(cpu, cpu->Y); }
 
 static void branch_if(CPU6507 *cpu, bool condition, uint16_t addr) {
-    if (condition) {
-        uint16_t old_pc = cpu->PC;
-        cpu->PC = addr;
+    if (!condition) {
+        return;
+    }
+
+    /* Dummy-cycle van een genomen branch. */
+    bus_tick(cpu->bus, 1);
+    cpu->extra_cycles += 1;
+
+    uint16_t old_pc = cpu->PC;
+    bool crossed = (old_pc & 0xFF00u) != (addr & 0xFF00u);
+
+    cpu->PC = addr;
+
+    if (crossed) {
+        /* Extra cycle bij branch over een paginagrens. */
         bus_tick(cpu->bus, 1);
-        if ((old_pc & 0xFF00u) != (cpu->PC & 0xFF00u)) {
-            bus_tick(cpu->bus, 1);
-        }
+        cpu->extra_cycles += 1;
     }
 }
 
@@ -114,15 +124,17 @@ static void instr_BVC(CPU6507 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_fla
 static void instr_BVS(CPU6507 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_V), addr); }
 
 static void instr_DEC(CPU6507 *cpu, uint16_t addr) {
-    uint8_t val = (uint8_t)(cpu_read_mem(cpu, addr) - 1u);
-    bus_tick(cpu->bus, 1);
+    uint8_t old_val = cpu_read_mem(cpu, addr);
+    cpu_write_mem(cpu, addr, old_val); /* RMW dummy write */
+    uint8_t val = (uint8_t)(old_val - 1u);
     cpu_write_mem(cpu, addr, val);
     cpu_update_zn(cpu, val);
 }
 
 static void instr_INC(CPU6507 *cpu, uint16_t addr) {
-    uint8_t val = (uint8_t)(cpu_read_mem(cpu, addr) + 1u);
-    bus_tick(cpu->bus, 1);
+    uint8_t old_val = cpu_read_mem(cpu, addr);
+    cpu_write_mem(cpu, addr, old_val); /* RMW dummy write */
+    uint8_t val = (uint8_t)(old_val + 1u);
     cpu_write_mem(cpu, addr, val);
     cpu_update_zn(cpu, val);
 }
@@ -135,7 +147,7 @@ static void instr_PHP(CPU6507 *cpu, uint16_t addr) {
 
 static void instr_PLP(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
-    bus_tick(cpu->bus, 1);
+    (void)cpu_read_mem(cpu, cpu->PC); /* dummy read */
     uint8_t st = cpu_pull_byte(cpu);
     cpu->status = (uint8_t)((st & ~(CPU_FLAG_B | CPU_FLAG_U)) | CPU_FLAG_U);
 }
@@ -144,7 +156,7 @@ static void instr_PHA(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_push_byte(c
 
 static void instr_PLA(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
-    bus_tick(cpu->bus, 1);
+    (void)cpu_read_mem(cpu, cpu->PC); /* dummy read */
     cpu->A = cpu_pull_byte(cpu);
     cpu_update_zn(cpu, cpu->A);
 }
@@ -171,36 +183,44 @@ static void instr_RTI(CPU6507 *cpu, uint16_t addr) {
 
 static void instr_JSR(CPU6507 *cpu, uint16_t addr) {
     uint16_t ret = (uint16_t)(cpu->PC - 1u);
-    bus_tick(cpu->bus, 1);
-    cpu_push_byte(cpu, (uint8_t)((ret >> 8) & 0xFFu));
-    cpu_push_byte(cpu, (uint8_t)(ret & 0xFFu));
+
+    bus_tick(cpu->bus, 1); /* ontbrekende JSR-cycle */
+
+    cpu_push_byte(cpu, (uint8_t)(ret >> 8));
+    cpu_push_byte(cpu, (uint8_t)ret);
+
     if (cpu->bus && cpu->bus->cart) {
-        cart_fe_on_byte(cpu->bus->cart, (uint8_t)((addr >> 8) & 0xFFu));
+        cart_fe_on_byte(cpu->bus->cart, (uint8_t)(addr >> 8));
     }
     cpu->PC = addr;
 }
 
 static void instr_RTS(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
+    bus_tick(cpu->bus, 2); /* ontbrekende RTS-cycle */
     uint8_t lo = cpu_pull_byte(cpu);
     uint8_t hi = cpu_pull_byte(cpu);
     if (cpu->bus && cpu->bus->cart) {
         cart_fe_on_rts_hi(cpu->bus->cart, hi);
     }
-    bus_tick(cpu->bus, 2);
     cpu->PC = (uint16_t)((((uint16_t)hi << 8) | lo) + 1u);
 }
 
 static void instr_ASL(CPU6507 *cpu, uint16_t addr) {
     bool is_acc = (addr == ADDR_NONE);
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
+
+    if (!is_acc) {
+        cpu_write_mem(cpu, addr, val); /* RMW dummy write */
+    }
+
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x80u) != 0);
     uint8_t res = (uint8_t)(val << 1);
     cpu_update_zn(cpu, res);
+
     if (is_acc) {
         cpu->A = res;
     } else {
-        bus_tick(cpu->bus, 1);
         cpu_write_mem(cpu, addr, res);
     }
 }
@@ -208,13 +228,17 @@ static void instr_ASL(CPU6507 *cpu, uint16_t addr) {
 static void instr_LSR(CPU6507 *cpu, uint16_t addr) {
     bool is_acc = (addr == ADDR_NONE);
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
+
+    if (!is_acc) {
+        cpu_write_mem(cpu, addr, val); /* RMW dummy write */
+    }
+
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x01u) != 0);
     uint8_t res = (uint8_t)(val >> 1);
     cpu_update_zn(cpu, res);
     if (is_acc) {
         cpu->A = res;
     } else {
-        bus_tick(cpu->bus, 1);
         cpu_write_mem(cpu, addr, res);
     }
 }
@@ -222,6 +246,11 @@ static void instr_LSR(CPU6507 *cpu, uint16_t addr) {
 static void instr_ROL(CPU6507 *cpu, uint16_t addr) {
     bool is_acc = (addr == ADDR_NONE);
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
+
+    if (!is_acc) {
+        cpu_write_mem(cpu, addr, val); /* RMW dummy write */
+    }
+
     uint8_t old_c = cpu_get_flag(cpu, CPU_FLAG_C) ? 1u : 0u;
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x80u) != 0);
     uint8_t res = (uint8_t)((val << 1) | old_c);
@@ -229,7 +258,6 @@ static void instr_ROL(CPU6507 *cpu, uint16_t addr) {
     if (is_acc) {
         cpu->A = res;
     } else {
-        bus_tick(cpu->bus, 1);
         cpu_write_mem(cpu, addr, res);
     }
 }
@@ -237,6 +265,11 @@ static void instr_ROL(CPU6507 *cpu, uint16_t addr) {
 static void instr_ROR(CPU6507 *cpu, uint16_t addr) {
     bool is_acc = (addr == ADDR_NONE);
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
+
+    if (!is_acc) {
+        cpu_write_mem(cpu, addr, val); /* RMW dummy write */
+    }
+
     uint8_t old_c = cpu_get_flag(cpu, CPU_FLAG_C) ? 1u : 0u;
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x01u) != 0);
     uint8_t res = (uint8_t)((val >> 1) | (old_c << 7));
@@ -244,7 +277,6 @@ static void instr_ROR(CPU6507 *cpu, uint16_t addr) {
     if (is_acc) {
         cpu->A = res;
     } else {
-        bus_tick(cpu->bus, 1);
         cpu_write_mem(cpu, addr, res);
     }
 }
@@ -600,17 +632,25 @@ void cpu_reset(CPU6507 *cpu) {
 }
 
 int cpu_step(CPU6507 *cpu) {
-    bus_reset_cycles_this_step(cpu->bus);
     cpu->extra_cycles = 0;
     cpu->page_crossed = false;
+    bus_reset_cycles_this_step(cpu->bus);
 
     uint16_t op_pc = cpu->PC;
-    cpu->hist[cpu->hist_idx++] = op_pc;
-
     uint8_t opcode = cpu_fetch_u8(cpu);
     OpcodeEntry entry = cpu->opcodes[opcode];
-    uint16_t target_addr = entry.mode(cpu);
+
+    uint16_t target_addr = entry.mode(cpu, entry.page_penalty);
     entry.exec(cpu, target_addr);
 
-    return bus_get_cycles_this_step(cpu->bus);
+    int actual = bus_get_cycles_this_step(cpu->bus);
+    int expected = (int)entry.base_cycles + cpu->extra_cycles;
+
+    if (actual != expected) {
+        fprintf(stderr,
+                "Cycle mismatch: PC=%04X opcode=%02X expected=%d actual=%d\n",
+                op_pc, opcode, expected, actual);
+    }
+
+    return actual;
 }

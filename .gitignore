@@ -5,3 +5,4 @@ __pycache__/
 atari2600
 atari2600_dbg
 6502core
+tests/cpu_test

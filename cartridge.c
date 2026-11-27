@@ -27,42 +27,38 @@ static void check_hotspot_ua(Cartridge *cart, uint16_t address) {
 }
 
 typedef struct {
+    uint64_t total_cycles;
+    uint64_t audio_cycles;
+    double fractional_clocks;
+    double music_pitch;
+    double clock_rate;    
     uint8_t tops[8];
     uint8_t bottoms[8];
     uint16_t counters[8];
     uint8_t flags[8];
-    bool music_mode[3];
+    bool music_enabled[3];
     uint8_t random_number;
     const uint8_t *display_rom; /* 2048 bytes (offset 0x2000) */
-    const uint8_t *freq_rom;    /* 255 bytes (offset 0x2800), optioneel */
 } DpcState;
 
 static DpcState dpc;
 
-static uint8_t dpc_bit_reverse(uint8_t b) {
-    b = (uint8_t)(((b & 0xF0u) >> 4) | ((b & 0x0Fu) << 4));
-    b = (uint8_t)(((b & 0xCCu) >> 2) | ((b & 0x33u) << 2));
-    b = (uint8_t)(((b & 0xAAu) >> 1) | ((b & 0x55u) << 1));
-    return b;
-}
-
 static void dpc_reset_state(const uint8_t *rom_data, size_t size) {
     memset(&dpc, 0, sizeof(dpc));
     dpc.random_number = 0x01u;
+    dpc.music_pitch = 1.0;
+    dpc.clock_rate = 1193191.66666667; /* Stella NTSC */
+
     if (rom_data && size >= 0x2800u) {
         dpc.display_rom = &rom_data[0x2000u];
-    }
-    if (rom_data && size >= 10495u) {
-        dpc.freq_rom = &rom_data[0x2800u];
     }
 }
 
 static void dpc_clock_random(void) {
-    /* 8-bit Galois/Fibonacci LFSR zoals in DPC hardware */
-    uint8_t bit = (uint8_t)(((dpc.random_number >> 7) ^
-                             (dpc.random_number >> 5) ^
-                             (dpc.random_number >> 4) ^
-                             (dpc.random_number >> 3)) & 1u);
+    uint8_t bit = (uint8_t)((((dpc.random_number >> 7) ^
+                              (dpc.random_number >> 5) ^
+                              (dpc.random_number >> 4) ^
+                              (dpc.random_number >> 3)) & 1u) ^ 1u);
     dpc.random_number = (uint8_t)((dpc.random_number << 1) | bit);
 }
 
@@ -75,27 +71,81 @@ static void dpc_update_flag(int f) {
     }
 }
 
+#define DPC_MUSIC_PERIOD_CPU_CYCLES 38u
+
+
+static void dpc_update_music_fetchers(void) {
+    uint64_t cycles = dpc.total_cycles - dpc.audio_cycles;
+    dpc.audio_cycles = dpc.total_cycles;
+
+    double clocks = (dpc.music_pitch * (double)cycles) /
+                    dpc.clock_rate + dpc.fractional_clocks;
+    uint32_t whole_clocks = (uint32_t)clocks;
+    dpc.fractional_clocks = clocks - (double)whole_clocks;
+
+    if (whole_clocks == 0) {
+        return;
+    }
+
+    for (int f = 5; f < 8; ++f) {
+        int ch = f - 5;
+        if (!dpc.music_enabled[ch]) {
+            continue;
+        }
+
+        int top = (int)dpc.tops[f] + 1;
+        int new_low = (int)(dpc.counters[f] & 0x00FFu);
+
+        if (dpc.tops[f] != 0) {
+            new_low -= (int)(whole_clocks % (uint32_t)top);
+            if (new_low < 0) {
+                new_low += top;
+            }
+        } else {
+            new_low = 0;
+        }
+
+        if (new_low <= dpc.bottoms[f]) {
+            dpc.flags[f] = 0x00u;
+        } else if (new_low <= dpc.tops[f]) {
+            dpc.flags[f] = 0xFFu;
+        }
+
+        dpc.counters[f] =
+            (uint16_t)((dpc.counters[f] & 0x0700u) | (uint16_t)new_low);
+    }
+}
+
+static uint8_t dpc_music_amplitude(void) {
+    dpc_update_music_fetchers();
+    static const uint8_t amp_table[8] = { 0, 4, 5, 9, 6, 10, 11, 15 };
+    uint8_t mask = 0;
+
+    for (int ch = 0; ch < 3; ch++) {
+        if (dpc.music_enabled[ch] && dpc.flags[5 + ch]) {
+            mask |= (uint8_t)(1u << ch);
+        }
+    }
+    return amp_table[mask];
+}
+
 static uint8_t dpc_fetch_byte(int f) {
     if (!dpc.display_rom) {
         return 0xFFu;
     }
-    uint16_t idx = (uint16_t)(dpc.counters[f] & 0x07FFu);
-    uint8_t val = dpc.display_rom[idx];
 
-    /* Na elke fetch telt de 11-bit counter 1 omlaag */
-    dpc.counters[f] = (uint16_t)((dpc.counters[f] - 1u) & 0x07FFu);
-    dpc_update_flag(f);
-    return val;
+    uint16_t current = (uint16_t)(dpc.counters[f] & 0x07FFu);
+    return dpc.display_rom[0x07FFu - current];
 }
 
 static uint8_t read_dpc(Cartridge *cart, uint16_t address) {
     if (!cart || !cart->rom_data) {
         return 0xFFu;
     }
-
+    dpc_clock_random();
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
 
-    /* Bankswitch hotspots ($1FF8 / $1FF9) */
+    /* Bankswitch hotspots (0x1FF8 / 0x1FF9) */
     if (addr == 0x1FF8u) {
         cart->current_bank = 0;
         return cart->banks[cart->current_bank][addr & 0x0FFFu];
@@ -107,68 +157,36 @@ static uint8_t read_dpc(Cartridge *cart, uint16_t address) {
 
     /* DPC Read Registers: $1000 - $103F */
     if (addr >= 0x1000u && addr <= 0x103Fu) {
-        int reg = (int)(addr & 0x003Fu);
-        int f = reg & 0x07;
+        unsigned reg = (unsigned)(addr - 0x1000u);
+        int f = (int)(reg & 0x07u);
+        unsigned function = (reg >> 3u) & 0x07u;
 
-        if (reg <= 0x03) {
-            /* $1000-$1003: Random number generator */
-            dpc_clock_random();
-            return dpc.random_number;
+        dpc_update_flag(f);
+
+        uint8_t result = 0u;
+        switch (function) {
+            case 0u:
+                result = (f < 4) ? dpc.random_number : dpc_music_amplitude();
+                break;
+            case 1u:
+                result = dpc_fetch_byte(f);
+                break;
+            case 2u:
+                result = (uint8_t)(dpc_fetch_byte(f) & dpc.flags[f]);
+                break;
+            case 7u:
+                result = dpc.flags[f];
+                break;
+            default:
+                result = 0u;
+                break;
         }
-        if (reg == 0x04) {
-            /* $1004: Sound / Music amplitude mixer (fetchers 5, 6, 7) */
-            static const uint8_t amp_table[8] = { 0, 4, 5, 9, 6, 10, 11, 15 };
-            uint8_t mask = 0;
-            for (int ch = 0; ch < 3; ch++) {
-                int df = 5 + ch;
-                if (dpc.music_mode[ch]) {
-                    /* Eenvoudige fase-benadering op basis van counter & top */
-                    if ((dpc.counters[df] & 0xFFu) > dpc.bottoms[df]) {
-                        mask |= (uint8_t)(1u << ch);
-                    }
-                } else if (dpc.flags[df]) {
-                    mask |= (uint8_t)(1u << ch);
-                }
-            }
-            return amp_table[mask];
+
+        if (f < 5 || !dpc.music_enabled[f - 5]) {
+            dpc.counters[f] =
+                (uint16_t)((dpc.counters[f] - 1u) & 0x07FFu);
         }
-        if (reg <= 0x07) {
-            /* $1005-$1007: Random fallback */
-            dpc_clock_random();
-            return dpc.random_number;
-        }
-        if (reg <= 0x0F) {
-            /* $1008-$100F: Data fetcher 0..7 direct */
-            return dpc_fetch_byte(f);
-        }
-        if (reg <= 0x17) {
-            /* $1010-$1017: Data fetcher 0..7 gemaskeerd met flag */
-            uint8_t data = dpc_fetch_byte(f);
-            return (uint8_t)(data & dpc.flags[f]);
-        }
-        if (reg <= 0x1F) {
-            /* $1018-$101F: Data fetcher 0..7 gemaskeerd + bit-reversed */
-            uint8_t data = dpc_fetch_byte(f);
-            return dpc_bit_reverse((uint8_t)(data & dpc.flags[f]));
-        }
-        if (reg <= 0x27) {
-            /* $1020-$1027: Data fetcher 0..7 gemaskeerd + nibble-swapped */
-            uint8_t data = dpc_fetch_byte(f);
-            uint8_t masked = (uint8_t)(data & dpc.flags[f]);
-            return (uint8_t)(((masked & 0x0Fu) << 4) | ((masked & 0xF0u) >> 4));
-        }
-        if (reg <= 0x2F) {
-            /* $1028-$102F: Data fetcher 0..7 gemaskeerd + shift right */
-            uint8_t data = dpc_fetch_byte(f);
-            return (uint8_t)((data & dpc.flags[f]) >> 1);
-        }
-        if (reg <= 0x37) {
-            /* $1030-$1037: Data fetcher 0..7 gemaskeerd + shift left */
-            uint8_t data = dpc_fetch_byte(f);
-            return (uint8_t)((data & dpc.flags[f]) << 1);
-        }
-        /* $1038-$103F: Flag register van data fetcher 0..7 */
-        return dpc.flags[f];
+        return result;
     }
 
     return cart->banks[cart->current_bank][addr & 0x0FFFu];
@@ -178,7 +196,7 @@ static void write_dpc(Cartridge *cart, uint16_t address, uint8_t value) {
     if (!cart) {
         return;
     }
-
+    dpc_clock_random();
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
 
     if (addr == 0x1FF8u) {
@@ -192,35 +210,37 @@ static void write_dpc(Cartridge *cart, uint16_t address, uint8_t value) {
 
     /* DPC Write Registers: $1040 - $107F */
     if (addr >= 0x1040u && addr <= 0x107Fu) {
-        int reg = (int)(addr - 0x1040u);
-        int f = reg & 0x07;
+        unsigned reg = (unsigned)(addr - 0x1040u);
+        int f = (int)(reg & 0x07u);
 
-        if (reg <= 0x07) {
-            /* $1040-$1047: Top register */
+        if (reg <= 0x07u) {
             dpc.tops[f] = value;
             dpc.flags[f] = 0x00u;
-        } else if (reg <= 0x0F) {
-            /* $1048-$104F: Bottom register */
+        } else if (reg <= 0x0Fu) {
             dpc.bottoms[f] = value;
-        } else if (reg <= 0x17) {
-            /* $1050-$1057: Counter low byte */
-            dpc.counters[f] = (uint16_t)((dpc.counters[f] & 0x0700u) | value);
-            dpc_update_flag(f);
-        } else if (reg <= 0x1F) {
-            /* $1058-$105F: Counter high 3 bits (en music mode voor fetchers 5..7) */
-            dpc.counters[f] = (uint16_t)((dpc.counters[f] & 0x00FFu) | (((uint16_t)value & 0x07u) << 8));
-            if (f >= 5) {
-                dpc.music_mode[f - 5] = (value & 0x10u) != 0;
+        } else if (reg <= 0x17u) {
+            uint8_t low = value;
+            if (f >= 5 && dpc.music_enabled[f - 5]) {
+                low = dpc.tops[f];
             }
-            dpc_update_flag(f);
-        } else if (reg >= 0x30 && reg <= 0x37) {
-            /* $1070-$1077: Reset random number generator */
+            dpc.counters[f] =
+                (uint16_t)((dpc.counters[f] & 0x0700u) | low);
+        } else if (reg <= 0x1Fu) {
+            dpc.counters[f] =
+                (uint16_t)((dpc.counters[f] & 0x00FFu) |
+                           ((uint16_t)(value & 0x07u) << 8));
+
+            if (f >= 5) {
+                int ch = f - 5;
+                dpc.music_enabled[ch] = ((value &0x10u) != 0);
+            }
+
+        } else if (reg >= 0x30u && reg <= 0x37u) {
+            /* $1070-$1077 */
             dpc.random_number = 0x01u;
         }
     }
 }
-
-
 
 static uint8_t read_ua(Cartridge *cart, uint16_t address) {
     check_hotspot_ua(cart, address);
@@ -253,12 +273,10 @@ static uint8_t read_e7(Cartridge *cart, uint16_t address) {
     }
 
     uint16_t addr = (uint16_t)(address & 0x0FFFu);
-    /* Bovenste 2K ($1800-$1FFF): vaste laatste 2K bank (offset 0x3800) */
     if (addr >= 0x0800u) {
         return cart->rom_data[0x3800u + (addr - 0x0800u)];
     }
 
-    /* Onderste 2K ($1000-$17FF): RAM-leesvenster ($1400-$17FF) of geschakelde 2K ROM-bank */
     if (e7_lower_is_ram) {
         if (addr >= 0x0400u) {
             return e7_ram[e7_lower_bank & 3][addr & 0x00FFu];
@@ -275,7 +293,6 @@ static void write_e7(Cartridge *cart, uint16_t address, uint8_t value) {
     check_hotspot_e7(address);
 
     uint16_t addr = (uint16_t)(address & 0x0FFFu);
-    /* Onderste 1K van het 2K-venster ($1000-$13FF) is het RAM-schrijfvenster */
     if (e7_lower_is_ram && addr < 0x0400u) {
         e7_ram[e7_lower_bank & 3][addr & 0x00FFu] = value;
     }
@@ -603,15 +620,17 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
                 cart->current_bank = (vec0 & 0x1000u) ? 0 : 1;
             }
             break;
+
         case CART_TYPE_DPC:
             cart->num_banks = 2;
             cart->banks[0] = &cart->rom_data[0x0000u];
             cart->banks[1] = &cart->rom_data[0x1000u];
-            cart->current_bank = 1; /* Pitfall II start in bank 1 */
+            cart->current_bank = 1;
             cart->read = read_dpc;
             cart->write = write_dpc;
             dpc_reset_state(cart->rom_data, size);
             break;
+
         case CART_TYPE_F6SC:
             cart->has_superchip_ram = true;
             /* fallthrough */
@@ -644,6 +663,7 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
             }
             cart->current_bank = 7;
             break;
+
         case CART_TYPE_EF:
             cart->num_banks = 16;
             cart->read = read_ef;
@@ -655,12 +675,11 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
             break;
 
         default:
-            /* Nog niet geïmplementeerde Stella-types: veilige 2K/4K fallback */
             cart->type = CART_TYPE_4K;
             cart->mask = (size <= 0x0800u) ? 0x07FFu : 0x0FFFu;
             cart->read = read_2k4k;
             cart->write = write_noop;
-            break;    
+            break;
     }
 
     const char *base_name = (name && name[0] != '\0') ? name : "Unknown";
@@ -686,4 +705,12 @@ void cart_write(Cartridge *cart, uint16_t addr, uint8_t val) {
     if (cart->write) {
         cart->write(cart, addr, val);
     }
+}
+
+void cart_step_cycles(Cartridge *cart, int cycles) {
+    if (!cart || cart->type != CART_TYPE_DPC || cycles <= 0) {
+        return;
+    }
+
+    dpc.total_cycles += (uint64_t)cycles;
 }

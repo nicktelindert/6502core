@@ -21,7 +21,7 @@ enum {
     CPU_FLAG_N = 1u << 7  /* 0x80 Negative */
 };
 
-typedef uint16_t (*AddrModeFn)(CPU6507 *cpu);
+typedef uint16_t (*AddrModeFn)(CPU6507 *cpu, bool page_penalty);
 typedef void (*InstrFn)(CPU6507 *cpu, uint16_t addr);
 
 typedef struct {

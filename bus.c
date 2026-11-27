@@ -26,9 +26,10 @@ void bus_init(
 }
 
 void bus_tick(Bus *bus, int cycles) {
-    if (cycles <= 0) {
+    if (!bus || cycles <= 0) {
         return;
     }
+
     bus->cycles_this_step += cycles;
     if (bus->tia_step && bus->tia) {
         bus->tia_step(bus->tia, cycles * 3);
@@ -36,55 +37,61 @@ void bus_tick(Bus *bus, int cycles) {
     if (bus->riot) {
         riot_step(bus->riot, cycles);
     }
+    cart_step_cycles(bus->cart, cycles);
 }
 
 uint8_t bus_read(Bus *bus, uint16_t address) {
-    bus->cycles_this_step += 1;
-    if (bus->tia_step && bus->tia) {
-        bus->tia_step(bus->tia, 3);
-    }
-    if (bus->riot) {
-        riot_step(bus->riot, 1);
+    if (!bus) {
+        return 0xFFu;
     }
 
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     Cartridge *cart = bus->cart;
 
-    if (addr >= 0x0100u && addr <= 0x01FFu && cart->type == CART_TYPE_FE) {
+    /* FE-cartridges gebruiken dit bereik voor RAM. */
+    if (cart != NULL && addr >= 0x0100u && addr <= 0x01FFu &&
+        cart->type == CART_TYPE_FE) {
+        bus_tick(bus, 1);
         return bus->ram[addr & 0x007Fu];
     }
 
     if (addr & 0x1000u) {
-        if (cart) {
-            return cart_read(cart, addr);
-        }
-        return 0xFFu;
+        bus_tick(bus, 1);
+        return cart ? cart_read(cart, addr) : 0xFFu;
     }
 
-    if (addr & 0x0080u) {
-        if (addr & 0x0200u) {
-            return bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
-        }
-        return bus->ram[addr & 0x7Fu];
+    /* Voor cycle-tick to make DPC work correctly */
+    if ((addr & 0x0280u) == 0x0280u && (addr & 0x001Fu) == 0x04u) {
+        uint8_t value = bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
+        bus_tick(bus, 1);
+        return value;
     }
 
-    return (bus->tia_read && bus->tia) ? bus->tia_read(bus->tia, addr) : 0xFFu;
+    bus_tick(bus, 1);
+
+    /* Overige RIOT-registerreads blijven na de cycle-tick. */
+    if ((addr & 0x0280u) == 0x0280u) {
+        return bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
+    }
+
+    /* RIOT RAM: A7=1, A9=0. */
+    if ((addr & 0x0280u) == 0x0080u) {
+        return bus->ram[addr & 0x007Fu];
+    }
+
+    return (bus->tia_read && bus->tia)
+        ? bus->tia_read(bus->tia, addr)
+        : 0xFFu;
 }
 
 void bus_write(Bus *bus, uint16_t address, uint8_t value) {
-    bus->cycles_this_step += 1;
-    if (bus->tia_step && bus->tia) {
-        bus->tia_step(bus->tia, 3);
-    }
-    if (bus->riot) {
-        riot_step(bus->riot, 1);
-    }
+    bus_tick(bus, 1);
 
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     uint8_t v = value;
     Cartridge *cart = bus->cart;
 
-    if (addr >= 0x0100u && addr <= 0x01FFu && cart->type == CART_TYPE_FE) {
+    if (cart != NULL && addr >= 0x0100u && addr <= 0x01FFu && cart->type == CART_TYPE_FE) {
         bus->ram[addr & 0x007Fu] = v;
         return;
     }
@@ -126,12 +133,16 @@ void bus_step_frame(Bus *bus, CPU6507 *cpu) {
             int clk = bus->tia->clock;
             int remaining = 228 - clk;
             if (remaining > 0) {
+                int stall_cycles = (remaining % 3 == 0) ? remaining / 3 : 1;
+
                 if (bus->tia_step) {
                     bus->tia_step(bus->tia, remaining);
                 }
                 if (bus->riot) {
-                    riot_step(bus->riot, remaining >= 3 ? (remaining / 3) : 1);
+                    riot_step(bus->riot, stall_cycles);
                 }
+                cart_step_cycles(bus->cart, stall_cycles);
+                bus->cycles_this_step += stall_cycles;
             }
         } else {
             cpu_step(cpu);

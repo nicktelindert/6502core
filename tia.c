@@ -38,8 +38,8 @@ static int hm_offset(uint8_t reg_val) {
 }
 
 static NusizLayout get_nusiz_layout(uint8_t nusiz) {
-    uint8_t mode = nusiz & 0x07u;
-    switch (mode) {
+    switch (nusiz & 0x07u) {
+        case 0u: return (NusizLayout){1, {0, 0, 0}, 1};
         case 1u: return (NusizLayout){1, {0, 16, 0}, 2};
         case 2u: return (NusizLayout){1, {0, 32, 0}, 2};
         case 3u: return (NusizLayout){1, {0, 16, 32}, 3};
@@ -85,7 +85,7 @@ void tia_init(TIA *tia, TIAAudio *audio) {
     tia->height = TIA_FB_HEIGHT;
     tia->clock = 0;
     tia->y = 0;
-    tia->start_drawing = false;
+    tia->visible_top_line = -1;
 
     for (int c = 0; c < 256; c++) {
         compute_ntsc_rgb((uint8_t)c, tia->ntsc_lut[c]);
@@ -115,17 +115,23 @@ void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
 
 
     switch (reg) {
-        case 0x00u: /* VSYNC */
+        case 0x00u: { /* VSYNC */
+            bool new_vsync_on = (v & 0x02u) != 0;
+            if (new_vsync_on && !tia->vsync_on) {
+                tia->frame_sync_pending = true;
+                tia->visible_top_line = -1;
+            }
             tia->vsync = v;
-            tia->vsync_on = v & 0x02u;
-            tia->y = 0;
-            tia->start_drawing = false;
+            tia->vsync_on = new_vsync_on;
             break;
+        }
         case 0x01u: /* VBLANK */
+            bool was_vblank = (tia->vblank & 0x02u) != 0;
+            bool now_vblank = (v & 0x02u) != 0;
+
             tia->vblank = v;
-            tia->start_drawing = false;
-            if ((v & 0x02u) == 0) {
-                tia->start_drawing = true;
+            if (was_vblank && !now_vblank && tia->visible_top_line < 0) {
+                tia->visible_top_line = tia->scanline;
             }
             break;
         case 0x02u: /* WSYNC */
@@ -306,7 +312,10 @@ static void tia_render_pixel(TIA *tia, int clk) {
         return;
     }
    
-    int y = tia->y;
+    int y = tia->scanline - tia->visible_top_line;
+    if (y < 0 || y >= tia->height) {
+        return;
+    }
 
     if (y == 0 && x == 0) {
         tia->frame_p0_top_y = -1;
@@ -322,9 +331,6 @@ static void tia_render_pixel(TIA *tia, int clk) {
         return;
     }
 
-    if (!tia->start_drawing) {
-        return;
-    }
     uint8_t active_grp0 = tia->vdelp0 ? tia->grp0_old : tia->grp0;
     uint8_t active_grp1 = tia->vdelp1 ? tia->grp1_old : tia->grp1;
     uint8_t active_enabl = tia->vdelbl ? tia->enabl_old : tia->enabl;
@@ -358,6 +364,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
     int p1_scale = lay1.scale;
     int p0_w = 8 * p0_scale;
     int p1_w = 8 * p1_scale;
+    
     bool refp0 = (tia->refp0 & 0x08u) != 0;
     bool refp1 = (tia->refp1 & 0x08u) != 0;
 
@@ -426,23 +433,17 @@ static void tia_render_pixel(TIA *tia, int clk) {
 
     bool m0_on = false;
     if (m0_en) {
-        for (int k = 0; k < lay0.num_offsets; k++) {
-            int dx = x - (m0_x + lay0.offsets[k]);
-            if (0 <= dx && dx < m0_w) {
-                m0_on = true;
-                break;
-            }
+        int dx = x - m0_x;
+        if (0 <= dx && dx < m0_w) {
+            m0_on = true;
         }
     }
 
     bool m1_on = false;
     if (m1_en) {
-        for (int k = 0; k < lay1.num_offsets; k++) {
-            int dx = x - (m1_x + lay1.offsets[k]);
-            if (0 <= dx && dx < m1_w) {
-                m1_on = true;
-                break;
-            }
+        int dx = x - m1_x;
+        if (0 <= dx && dx < m1_w) {
+            m1_on = true;
         }
     }
 
@@ -452,6 +453,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
     if (p0_on && tia->frame_p0_top_y < 0) {
         tia->frame_p0_top_y = y;
     }
+    
 
     if (p0_on || p1_on || m0_on || m1_on || bl_on) {
         if (m0_on) {
@@ -481,7 +483,9 @@ static void tia_render_pixel(TIA *tia, int clk) {
         }
     }
 
-    uint8_t pfc = pf_score ? ((x < 80) ? colup0 : colup1) : colupf;
+    uint8_t pfc = pf_score
+    ? ((x < 80) ? colup0 : colup1)
+    : colupf;
     uint8_t c;
     if (pf_prio) {
         if (pf_on || bl_on) c = pfc;
@@ -523,27 +527,19 @@ void tia_tick_clock(TIA *tia) {
     if (clk >= 228) {
         clk = 0;
 
-        if (tia->start_drawing) {
-            if (tia->y + 1 < TIA_FB_HEIGHT) {
-                tia->y += 1;
-            }
-        }
-
         tia->scanline += 1;
         if (tia->wsync) {
             tia->wsync = false;
         }
-
-        if ((!tia->prev_vsync_on && tia->vsync_on)) {
+        
+        if (tia->frame_sync_pending) {
             tia->frame_ready = true;
             if (tia->audio) {
                 tia_audio_flush_frame(tia->audio);
             }
             tia->scanline = 0;
+            tia->frame_sync_pending = false;
         }
-        
-        tia->prev_vsync_on = tia->vsync_on;
-
     }
 
     tia->clock = clk;

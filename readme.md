@@ -6,11 +6,11 @@ Originally, I built this project in Python and was quite happy with how it turne
 The goal of **6502core** is to provide a clean, cycle-oriented MOS 6502 CPU core (including variants like the 6507) that can drive multiple classic consoles. Right now, the focus is on the Atari lineup—starting with the Atari 2600—before expanding to other 6502-based systems.
 
 ## Rewritten TIA (Color-Clock Accuracy)
-After researching the hardware behavior and documenting the timing details, I rewrote the entire TIA implementation from scratch. Instead of rendering on a per-scanline basis, it now operates at the **color-clock level**, driving video and audio directly from hardware triggers and cycle timing.
+After researching and documenting the hardware behavior, I rewrote the TIA to render at the **color-clock level**. This provides more accurate video and audio timing than the earlier scanline-based approach. Scanline tracking remains useful for frame bookkeeping, but it does not replace color-clock rendering.
 
 
 ## Bugs
-- [] Donkey Kong Jr start rendering way too late
+- [ ] Donkey Kong Jr start rendering way too late
 
 ## Roadmap
 - [x] Rewrite core emulator from Python to C
@@ -20,6 +20,7 @@ After researching the hardware behavior and documenting the timing details, I re
 - [x] Set rendering to 4:3 ratio and add overscan option(only height)
 - [x] Borrowed the Cartridge detection from Stella
 - [x] Added GPL V2 license to be compatible with Stella
-- [ ] Add DPC support
+- [x] Add DPC support
 - [ ] Expand Atari support (e.g., Atari 5200 / 7800)
-- [ ] Add support for additional MOS 6502-based consoles (e.g., NES)
+- [ ] Add support for the NES
+- [ ] Consider other consoles using the MOS 6502
