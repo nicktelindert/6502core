@@ -85,7 +85,7 @@ void tia_init(TIA *tia, TIAAudio *audio) {
     tia->height = TIA_FB_HEIGHT;
     tia->clock = 0;
     tia->y = 0;
-    tia->start_drawing = false;
+    tia->visible_top_line = -1;
 
     for (int c = 0; c < 256; c++) {
         compute_ntsc_rgb((uint8_t)c, tia->ntsc_lut[c]);
@@ -115,17 +115,23 @@ void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
 
 
     switch (reg) {
-        case 0x00u: /* VSYNC */
+        case 0x00u: { /* VSYNC */
+            bool new_vsync_on = (v & 0x02u) != 0;
+            if (new_vsync_on && !tia->vsync_on) {
+                tia->frame_sync_pending = true;
+                tia->visible_top_line = -1;
+            }
             tia->vsync = v;
-            tia->vsync_on = v & 0x02u;
-            tia->y = 0;
-            tia->start_drawing = false;
+            tia->vsync_on = new_vsync_on;
             break;
+        }
         case 0x01u: /* VBLANK */
+            bool was_vblank = (tia->vblank & 0x02u) != 0;
+            bool now_vblank = (v & 0x02u) != 0;
+
             tia->vblank = v;
-            tia->start_drawing = false;
-            if ((v & 0x02u) == 0) {
-                tia->start_drawing = true;
+            if (was_vblank && !now_vblank && tia->visible_top_line < 0) {
+                tia->visible_top_line = tia->scanline;
             }
             break;
         case 0x02u: /* WSYNC */
@@ -306,7 +312,10 @@ static void tia_render_pixel(TIA *tia, int clk) {
         return;
     }
    
-    int y = tia->y;
+    int y = tia->scanline - tia->visible_top_line;
+    if (y < 0 || y >= tia->height) {
+        return;
+    }
 
     if (y == 0 && x == 0) {
         tia->frame_p0_top_y = -1;
@@ -322,9 +331,6 @@ static void tia_render_pixel(TIA *tia, int clk) {
         return;
     }
 
-    if (!tia->start_drawing) {
-        return;
-    }
     uint8_t active_grp0 = tia->vdelp0 ? tia->grp0_old : tia->grp0;
     uint8_t active_grp1 = tia->vdelp1 ? tia->grp1_old : tia->grp1;
     uint8_t active_enabl = tia->vdelbl ? tia->enabl_old : tia->enabl;
@@ -521,27 +527,19 @@ void tia_tick_clock(TIA *tia) {
     if (clk >= 228) {
         clk = 0;
 
-        if (tia->start_drawing) {
-            if (tia->y + 1 < TIA_FB_HEIGHT) {
-                tia->y += 1;
-            }
-        }
-
         tia->scanline += 1;
         if (tia->wsync) {
             tia->wsync = false;
         }
-
-        if ((!tia->prev_vsync_on && tia->vsync_on)) {
+        
+        if (tia->frame_sync_pending) {
             tia->frame_ready = true;
             if (tia->audio) {
                 tia_audio_flush_frame(tia->audio);
             }
             tia->scanline = 0;
+            tia->frame_sync_pending = false;
         }
-        
-        tia->prev_vsync_on = tia->vsync_on;
-
     }
 
     tia->clock = clk;

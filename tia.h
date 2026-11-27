@@ -19,15 +19,11 @@ typedef struct {
 typedef struct TIA {
     TIAAudio *audio;
     int audio_clock;
-    bool audio_mid_done;
     bool vsync_on;
-    bool prev_vsync_on;
-    bool start_drawing;
+    bool frame_sync_pending;
 
     int frame_p0_top_y;
-    int debug_p0_x;
-    int debug_p1_x;
-    int debug_bl_x;
+    int visible_top_line;
     int y;
 
     /* Sync & Control */
