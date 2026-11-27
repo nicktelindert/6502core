@@ -2,7 +2,6 @@ __pycache__/
 *.a26
 .venv
 *.bin
-atari2600
-atari2600_dbg
 6502core
+6502core_rel
 tests/cpu_test
