@@ -49,7 +49,7 @@ uint8_t bus_read(Bus *bus, uint16_t address) {
     Cartridge *cart = bus->cart;
 
     /* FE-cartridges gebruiken dit bereik voor RAM. */
-    if (cart && addr >= 0x0100u && addr <= 0x01FFu &&
+    if (cart != NULL && addr >= 0x0100u && addr <= 0x01FFu &&
         cart->type == CART_TYPE_FE) {
         bus_tick(bus, 1);
         return bus->ram[addr & 0x007Fu];
@@ -91,7 +91,7 @@ void bus_write(Bus *bus, uint16_t address, uint8_t value) {
     uint8_t v = value;
     Cartridge *cart = bus->cart;
 
-    if (addr >= 0x0100u && addr <= 0x01FFu && cart->type == CART_TYPE_FE) {
+    if (cart != NULL && addr >= 0x0100u && addr <= 0x01FFu && cart->type == CART_TYPE_FE) {
         bus->ram[addr & 0x007Fu] = v;
         return;
     }
