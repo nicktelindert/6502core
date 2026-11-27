@@ -26,9 +26,10 @@ void bus_init(
 }
 
 void bus_tick(Bus *bus, int cycles) {
-    if (cycles <= 0) {
+    if (!bus || cycles <= 0) {
         return;
     }
+
     bus->cycles_this_step += cycles;
     if (bus->tia_step && bus->tia) {
         bus->tia_step(bus->tia, cycles * 3);
@@ -36,16 +37,11 @@ void bus_tick(Bus *bus, int cycles) {
     if (bus->riot) {
         riot_step(bus->riot, cycles);
     }
+    cart_step_cycles(bus->cart, cycles);
 }
 
 uint8_t bus_read(Bus *bus, uint16_t address) {
-    bus->cycles_this_step += 1;
-    if (bus->tia_step && bus->tia) {
-        bus->tia_step(bus->tia, 3);
-    }
-    if (bus->riot) {
-        riot_step(bus->riot, 1);
-    }
+    bus_tick(bus, 1);
 
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     Cartridge *cart = bus->cart;
@@ -72,13 +68,7 @@ uint8_t bus_read(Bus *bus, uint16_t address) {
 }
 
 void bus_write(Bus *bus, uint16_t address, uint8_t value) {
-    bus->cycles_this_step += 1;
-    if (bus->tia_step && bus->tia) {
-        bus->tia_step(bus->tia, 3);
-    }
-    if (bus->riot) {
-        riot_step(bus->riot, 1);
-    }
+    bus_tick(bus, 1);
 
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     uint8_t v = value;
@@ -126,12 +116,15 @@ void bus_step_frame(Bus *bus, CPU6507 *cpu) {
             int clk = bus->tia->clock;
             int remaining = 228 - clk;
             if (remaining > 0) {
+                int stall_cycles = (remaining >= 3) ? remaining / 3 : 1;
+
                 if (bus->tia_step) {
                     bus->tia_step(bus->tia, remaining);
                 }
                 if (bus->riot) {
-                    riot_step(bus->riot, remaining >= 3 ? (remaining / 3) : 1);
+                    riot_step(bus->riot, stall_cycles);
                 }
+                cart_step_cycles(bus->cart, stall_cycles);
             }
         } else {
             cpu_step(cpu);
