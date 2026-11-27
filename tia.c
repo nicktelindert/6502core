@@ -38,16 +38,15 @@ static int hm_offset(uint8_t reg_val) {
 }
 
 static NusizLayout get_nusiz_layout(uint8_t nusiz) {
-    uint8_t mode = nusiz & 0x07u;
-
-    switch (mode) {
-        case 1u: return (NusizLayout){2, {0, 16, 0}, 1};
-        case 2u: return (NusizLayout){2, {0, 32, 0}, 1};
-        case 3u: return (NusizLayout){3, {0, 16, 32}, 1};
-        case 4u: return (NusizLayout){2, {0, 64, 0}, 1};
-        case 5u: return (NusizLayout){1, {0, 0, 0}, 1};
-        case 6u: return (NusizLayout){3, {0, 32, 64}, 1};
-        case 7u: return (NusizLayout){3, {0, 0, 0}, 1};
+    switch (nusiz & 0x07u) {
+        case 0u: return (NusizLayout){1, {0, 0, 0}, 1};
+        case 1u: return (NusizLayout){1, {0, 16, 0}, 2};
+        case 2u: return (NusizLayout){1, {0, 32, 0}, 2};
+        case 3u: return (NusizLayout){1, {0, 16, 32}, 3};
+        case 4u: return (NusizLayout){1, {0, 64, 0}, 2};
+        case 5u: return (NusizLayout){2, {0, 0, 0}, 1};
+        case 6u: return (NusizLayout){1, {0, 32, 64}, 3};
+        case 7u: return (NusizLayout){4, {0, 0, 0}, 1};
         default: return (NusizLayout){1, {0, 0, 0}, 1};
     }
 }
@@ -355,10 +354,11 @@ static void tia_render_pixel(TIA *tia, int clk) {
     NusizLayout lay0 = get_nusiz_layout(tia->nusiz0);
     NusizLayout lay1 = get_nusiz_layout(tia->nusiz1);
 
-    int p0_scale = 1 << ((tia->nusiz0 >> 5) & 0x03);
-    int p1_scale = 1 << ((tia->nusiz1 >> 5) & 0x03);
+    int p0_scale = lay0.scale;
+    int p1_scale = lay1.scale;
     int p0_w = 8 * p0_scale;
     int p1_w = 8 * p1_scale;
+    
     bool refp0 = (tia->refp0 & 0x08u) != 0;
     bool refp1 = (tia->refp1 & 0x08u) != 0;
 
@@ -447,6 +447,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
     if (p0_on && tia->frame_p0_top_y < 0) {
         tia->frame_p0_top_y = y;
     }
+    
 
     if (p0_on || p1_on || m0_on || m1_on || bl_on) {
         if (m0_on) {
