@@ -107,18 +107,14 @@ static uint8_t dpc_fetch_byte(int f) {
         return 0xFFu;
     }
 
-    uint16_t idx = (uint16_t)(dpc.counters[f] & 0x07FFu);
-    uint8_t val = dpc.display_rom[idx];
-
     uint16_t current = (uint16_t)(dpc.counters[f] & 0x07FFu);
-    uint16_t next = (uint16_t)((current - 1u) & 0x07FFu);
-    dpc.counters[f] = next;
+    uint16_t rom_index = (uint16_t)(0x07FFu - current);
+    uint8_t val = dpc.display_rom[rom_index];
 
-    if ((dpc.counters[f] & 0x00FFu) == dpc.bottoms[f]) {
-        dpc.counters[f] =
-            (uint16_t)((dpc.counters[f] & 0x0700u) |
-                       dpc.tops[f]);
-    }
+    /* Fetchers tellen per read omlaag en wikkelen modulo 0x800. */
+    dpc.counters[f] = (uint16_t)((current - 1u) & 0x07FFu);
+
+    /* De flags vergelijken de lage 8 bits van de nieuwe teller. */
     dpc_update_flag(f);
     return val;
 }
@@ -236,7 +232,7 @@ static void write_dpc(Cartridge *cart, uint16_t address, uint8_t value) {
 
             if (f >= 5) {
                 int ch = f - 5;
-                dpc.music_enabled[ch] = ((value & 0x10u) != 0);
+                dpc.music_enabled[ch] = ((value &0x10u) != 0);
 
                 if (!dpc.music_enabled[ch]) {
                     dpc.music_phase[ch] = 0;
