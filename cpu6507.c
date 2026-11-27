@@ -24,6 +24,11 @@ void cpu_set_page_crossed(CPU6507 *cpu, bool crossed) {
 /* --- Interne CPU-helpers --- */
 
 static void cpu_write_mem(CPU6507 *cpu, uint16_t address, uint8_t value) {
+    if (address < 0x0080u &&
+        ((address & 0x3Fu) == 0x10u || (address & 0x3Fu) == 0x11u)) {
+        fprintf(stderr, "TIA RESP write: PC=%04X addr=%04X value=%02X\n",
+                cpu->PC, address, value);
+    }
     bus_write(cpu->bus, address, value);
 }
 
@@ -94,14 +99,21 @@ static void instr_INX(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->X = (uint8
 static void instr_INY(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->Y = (uint8_t)(cpu->Y + 1u); cpu_update_zn(cpu, cpu->Y); }
 
 static void branch_if(CPU6507 *cpu, bool condition, uint16_t addr) {
-    if (condition) {
-        uint16_t old_pc = cpu->PC;
-        cpu->PC = addr;
-        cpu->extra_cycles = 1;
+    if (!condition) {
+        return;
+    }
 
-        if ((old_pc & 0xFF00u) != (cpu->PC & 0xFF00u)) {
-            cpu->page_crossed = true;
-        }
+    /* Dummy-cycle van een genomen branch. */
+    bus_tick(cpu->bus, 1);
+
+    uint16_t old_pc = cpu->PC;
+    bool crossed = (old_pc & 0xFF00u) != (addr & 0xFF00u);
+
+    cpu->PC = addr;
+
+    if (crossed) {
+        /* Extra cycle bij branch over een paginagrens. */
+        bus_tick(cpu->bus, 1);
     }
 }
 
@@ -595,14 +607,10 @@ int cpu_step(CPU6507 *cpu) {
     cpu->page_crossed = false;
     bus_reset_cycles_this_step(cpu->bus);
 
-    uint16_t op_pc = cpu->PC;
-    cpu->hist[cpu->hist_idx++] = op_pc;
-
     uint8_t opcode = cpu_fetch_u8(cpu);
     OpcodeEntry entry = cpu->opcodes[opcode];
-
-    uint16_t target_addr = entry.mode(cpu);
+    uint16_t target_addr = entry.mode(cpu, entry.page_penalty);
     entry.exec(cpu, target_addr);
 
-    return 0;
+    return bus_get_cycles_this_step(cpu->bus);
 }
