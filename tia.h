@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #define TIA_FB_WIDTH  160
 #define TIA_FB_HEIGHT 192
@@ -98,7 +99,10 @@ typedef struct TIA {
 
     int width;
     int height;
-    uint8_t framebuffer[TIA_FB_SIZE];
+    uint8_t *framebuffer;
+    size_t framebuffer_capacity;
+    int frame_height;
+    int completed_frame_height;
     uint8_t ntsc_lut[256][3];
 } TIA;
 
@@ -106,5 +110,6 @@ void tia_init(TIA *tia, TIAAudio *audio);
 uint8_t tia_read(TIA *tia, uint16_t addr);
 void tia_write(TIA *tia, uint16_t addr, uint8_t val);
 void tia_step(TIA *tia, int color_clocks);
+void tia_destroy(TIA *tia);
 
 #endif /* TIA_H */
