@@ -147,6 +147,7 @@ static void instr_PHP(CPU6507 *cpu, uint16_t addr) {
 
 static void instr_PLP(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
+    (void)cpu_read_mem(cpu, cpu->PC); /* dummy read */
     uint8_t st = cpu_pull_byte(cpu);
     cpu->status = (uint8_t)((st & ~(CPU_FLAG_B | CPU_FLAG_U)) | CPU_FLAG_U);
 }
@@ -155,6 +156,7 @@ static void instr_PHA(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_push_byte(c
 
 static void instr_PLA(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
+    (void)cpu_read_mem(cpu, cpu->PC); /* dummy read */
     cpu->A = cpu_pull_byte(cpu);
     cpu_update_zn(cpu, cpu->A);
 }
