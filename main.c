@@ -303,7 +303,7 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     SDL_Color green = { 0, 255, 120, 255 };
     SDL_Color yellow = { 255, 255, 100, 255 };
     SDL_Color warn = { 255, 200, 0, 255 };
-    char header[256] = "";
+    char header[256] = "Select ROM";
 
     draw_overlay_box(renderer, 15, 15, win_w - 30, win_h - 30, 225);
     draw_text(renderer, 25, 25, header, green, 2);
