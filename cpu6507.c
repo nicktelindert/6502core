@@ -105,6 +105,7 @@ static void branch_if(CPU6507 *cpu, bool condition, uint16_t addr) {
 
     /* Dummy-cycle van een genomen branch. */
     bus_tick(cpu->bus, 1);
+    cpu->extra_cycles += 1;
 
     uint16_t old_pc = cpu->PC;
     bool crossed = (old_pc & 0xFF00u) != (addr & 0xFF00u);
@@ -114,6 +115,7 @@ static void branch_if(CPU6507 *cpu, bool condition, uint16_t addr) {
     if (crossed) {
         /* Extra cycle bij branch over een paginagrens. */
         bus_tick(cpu->bus, 1);
+        cpu->extra_cycles += 1;
     }
 }
 
@@ -127,13 +129,17 @@ static void instr_BVC(CPU6507 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_fla
 static void instr_BVS(CPU6507 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_V), addr); }
 
 static void instr_DEC(CPU6507 *cpu, uint16_t addr) {
-    uint8_t val = (uint8_t)(cpu_read_mem(cpu, addr) - 1u);
+    uint8_t old_val = cpu_read_mem(cpu, addr);
+    cpu_write_mem(cpu, addr, old_val); /* RMW dummy write */
+    uint8_t val = (uint8_t)(old_val - 1u);
     cpu_write_mem(cpu, addr, val);
     cpu_update_zn(cpu, val);
 }
 
 static void instr_INC(CPU6507 *cpu, uint16_t addr) {
-    uint8_t val = (uint8_t)(cpu_read_mem(cpu, addr) + 1u);
+    uint8_t old_val = cpu_read_mem(cpu, addr);
+    cpu_write_mem(cpu, addr, old_val); /* RMW dummy write */
+    uint8_t val = (uint8_t)(old_val + 1u);
     cpu_write_mem(cpu, addr, val);
     cpu_update_zn(cpu, val);
 }
@@ -180,16 +186,21 @@ static void instr_RTI(CPU6507 *cpu, uint16_t addr) {
 
 static void instr_JSR(CPU6507 *cpu, uint16_t addr) {
     uint16_t ret = (uint16_t)(cpu->PC - 1u);
-    cpu_push_byte(cpu, (uint8_t)((ret >> 8) & 0xFFu));
-    cpu_push_byte(cpu, (uint8_t)(ret & 0xFFu));
+
+    bus_tick(cpu->bus, 1); /* ontbrekende JSR-cycle */
+
+    cpu_push_byte(cpu, (uint8_t)(ret >> 8));
+    cpu_push_byte(cpu, (uint8_t)ret);
+
     if (cpu->bus && cpu->bus->cart) {
-        cart_fe_on_byte(cpu->bus->cart, (uint8_t)((addr >> 8) & 0xFFu));
+        cart_fe_on_byte(cpu->bus->cart, (uint8_t)(addr >> 8));
     }
     cpu->PC = addr;
 }
 
 static void instr_RTS(CPU6507 *cpu, uint16_t addr) {
     (void)addr;
+    bus_tick(cpu->bus, 2); /* ontbrekende RTS-cycle */
     uint8_t lo = cpu_pull_byte(cpu);
     uint8_t hi = cpu_pull_byte(cpu);
     if (cpu->bus && cpu->bus->cart) {
@@ -201,9 +212,15 @@ static void instr_RTS(CPU6507 *cpu, uint16_t addr) {
 static void instr_ASL(CPU6507 *cpu, uint16_t addr) {
     bool is_acc = (addr == ADDR_NONE);
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
+
+    if (!is_acc) {
+        cpu_write_mem(cpu, addr, val); /* RMW dummy write */
+    }
+
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x80u) != 0);
     uint8_t res = (uint8_t)(val << 1);
     cpu_update_zn(cpu, res);
+
     if (is_acc) {
         cpu->A = res;
     } else {
@@ -214,6 +231,11 @@ static void instr_ASL(CPU6507 *cpu, uint16_t addr) {
 static void instr_LSR(CPU6507 *cpu, uint16_t addr) {
     bool is_acc = (addr == ADDR_NONE);
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
+
+    if (!is_acc) {
+        cpu_write_mem(cpu, addr, val); /* RMW dummy write */
+    }
+
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x01u) != 0);
     uint8_t res = (uint8_t)(val >> 1);
     cpu_update_zn(cpu, res);
@@ -227,6 +249,11 @@ static void instr_LSR(CPU6507 *cpu, uint16_t addr) {
 static void instr_ROL(CPU6507 *cpu, uint16_t addr) {
     bool is_acc = (addr == ADDR_NONE);
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
+
+    if (!is_acc) {
+        cpu_write_mem(cpu, addr, val); /* RMW dummy write */
+    }
+
     uint8_t old_c = cpu_get_flag(cpu, CPU_FLAG_C) ? 1u : 0u;
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x80u) != 0);
     uint8_t res = (uint8_t)((val << 1) | old_c);
@@ -241,6 +268,11 @@ static void instr_ROL(CPU6507 *cpu, uint16_t addr) {
 static void instr_ROR(CPU6507 *cpu, uint16_t addr) {
     bool is_acc = (addr == ADDR_NONE);
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
+
+    if (!is_acc) {
+        cpu_write_mem(cpu, addr, val); /* RMW dummy write */
+    }
+
     uint8_t old_c = cpu_get_flag(cpu, CPU_FLAG_C) ? 1u : 0u;
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x01u) != 0);
     uint8_t res = (uint8_t)((val >> 1) | (old_c << 7));
@@ -402,14 +434,14 @@ static void build_opcode_table(CPU6507 *cpu) {
     set_op(cpu, 0x2C, instr_BIT, mode_ABS, 4, false);
 
     /* Branches */
-    set_op(cpu, 0x10, instr_BPL, mode_REL, 2, true);
-    set_op(cpu, 0x30, instr_BMI, mode_REL, 2, true);
-    set_op(cpu, 0x50, instr_BVC, mode_REL, 2, true);
-    set_op(cpu, 0x70, instr_BVS, mode_REL, 2, true);
-    set_op(cpu, 0x90, instr_BCC, mode_REL, 2, true);
-    set_op(cpu, 0xB0, instr_BCS, mode_REL, 2, true);
-    set_op(cpu, 0xD0, instr_BNE, mode_REL, 2, true);
-    set_op(cpu, 0xF0, instr_BEQ, mode_REL, 2, true);
+    set_op(cpu, 0x10, instr_BPL, mode_REL, 2, false);
+    set_op(cpu, 0x30, instr_BMI, mode_REL, 2, false);
+    set_op(cpu, 0x50, instr_BVC, mode_REL, 2, false);
+    set_op(cpu, 0x70, instr_BVS, mode_REL, 2, false);
+    set_op(cpu, 0x90, instr_BCC, mode_REL, 2, false);
+    set_op(cpu, 0xB0, instr_BCS, mode_REL, 2, false);
+    set_op(cpu, 0xD0, instr_BNE, mode_REL, 2, false);
+    set_op(cpu, 0xF0, instr_BEQ, mode_REL, 2, false);
 
     /* BRK / RTI / RTS / JSR / JMP */
     set_op(cpu, 0x00, instr_BRK, mode_IMP, 7, false);
@@ -607,10 +639,21 @@ int cpu_step(CPU6507 *cpu) {
     cpu->page_crossed = false;
     bus_reset_cycles_this_step(cpu->bus);
 
+    uint16_t op_pc = cpu->PC;
     uint8_t opcode = cpu_fetch_u8(cpu);
     OpcodeEntry entry = cpu->opcodes[opcode];
+
     uint16_t target_addr = entry.mode(cpu, entry.page_penalty);
     entry.exec(cpu, target_addr);
 
-    return bus_get_cycles_this_step(cpu->bus);
+    int actual = bus_get_cycles_this_step(cpu->bus);
+    int expected = (int)entry.base_cycles + cpu->extra_cycles;
+
+    if (actual != expected) {
+        fprintf(stderr,
+                "Cycle mismatch: PC=%04X opcode=%02X expected=%d actual=%d\n",
+                op_pc, opcode, expected, actual);
+    }
+
+    return actual;
 }

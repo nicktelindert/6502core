@@ -80,6 +80,7 @@ uint16_t mode_ABY(CPU6507 *cpu, bool page_penalty) {
     cpu_set_page_crossed(cpu, crossed);
     if (crossed && page_penalty) {
         bus_tick(cpu->bus, 1);
+        cpu->extra_cycles += 1;
     }
     return addr;
 }
