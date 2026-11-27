@@ -20,6 +20,6 @@ After researching the hardware behavior and documenting the timing details, I re
 - [x] Set rendering to 4:3 ratio and add overscan option(only height)
 - [x] Borrowed the Cartridge detection from Stella
 - [x] Added GPL V2 license to be compatible with Stella
-- [ ] Add DPC support
+- [x] Add DPC support
 - [ ] Expand Atari support (e.g., Atari 5200 / 7800)
 - [ ] Add support for additional MOS 6502-based consoles (e.g., NES)
