@@ -8,10 +8,6 @@ The goal of **6502core** is to provide a clean, cycle-oriented MOS 6502 CPU core
 ## Rewritten TIA (Color-Clock Accuracy)
 After researching and documenting the hardware behavior, I rewrote the TIA to render at the **color-clock level**. This provides more accurate video and audio timing than the earlier scanline-based approach. Scanline tracking remains useful for frame bookkeeping, but it does not replace color-clock rendering.
 
-
-## Bugs
-- [ ] Donkey Kong Jr start rendering way too late
-
 ## Roadmap
 - [x] Rewrite core emulator from Python to C
 - [x] Rewrite TIA to operate at color-clock level
