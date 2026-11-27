@@ -1,6 +1,8 @@
 #include "tia.h"
 #include "audio.h"
 #include <string.h>
+#include <stdlib.h>
+
 
 /* Optionele audio-hooks (koppel aan jouw TIAAudio in C) */
 extern void tia_audio_tick_half_scanline(TIAAudio *audio);
@@ -76,7 +78,13 @@ static void compute_ntsc_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
 }
 
 void tia_init(TIA *tia, TIAAudio *audio) {
-    memset(tia, 0, sizeof(*tia));
+    tia->framebuffer_capacity = 0;
+    tia->framebuffer = NULL;
+    tia->frame_height = 0;
+    tia->completed_frame_height = 0;
+    tia->scanline = 0;
+    tia->frame_ready = false;    
+    tia->frame_sync_pending = false;
     tia->audio = audio;
     tia->frame_p0_top_y = -1;
     tia->inpt4 = 0x80u;
@@ -125,7 +133,7 @@ void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
             tia->vsync_on = new_vsync_on;
             break;
         }
-        case 0x01u: /* VBLANK */
+        case 0x01u: { /* VBLANK */
             bool was_vblank = (tia->vblank & 0x02u) != 0;
             bool now_vblank = (v & 0x02u) != 0;
 
@@ -134,6 +142,7 @@ void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
                 tia->visible_top_line = tia->scanline;
             }
             break;
+        }
         case 0x02u: /* WSYNC */
             if (tia->clock != 0) {
                 tia->wsync = true;
@@ -306,23 +315,60 @@ void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
     }
 }
 
+static bool tia_reserve_scanlines(TIA *tia, int rows) {
+    if (rows <= 0 || (size_t)rows > SIZE_MAX / (TIA_FB_WIDTH * 3u)) {
+        return false;
+    }
+
+    size_t needed = (size_t)rows * TIA_FB_WIDTH * 3u;
+    if (needed <= tia->framebuffer_capacity) {
+        return true;
+    }
+
+    size_t capacity = tia->framebuffer_capacity
+        ? tia->framebuffer_capacity
+        : TIA_FB_WIDTH * 3u;
+
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2u) {
+            capacity = needed;
+            break;
+        }
+        capacity *= 2u;
+    }
+
+    uint8_t *buffer = realloc(tia->framebuffer, capacity);
+    if (!buffer) {
+        return false;
+    }
+
+    tia->framebuffer = buffer;
+    tia->framebuffer_capacity = capacity;
+    return true;
+}
+
+
 static void tia_render_pixel(TIA *tia, int clk) {
     int x = clk - 68;
     if (x < 0 || x >= 160) {
         return;
     }
    
-    int y = tia->scanline - tia->visible_top_line;
-    if (y < 0 || y >= tia->height) {
+    int y = tia->scanline;
+
+    if (y < 0 || !tia_reserve_scanlines(tia, y + 1)) {
         return;
     }
 
-    if (y == 0 && x == 0) {
-        tia->frame_p0_top_y = -1;
+
+    if (y + 1 > tia->frame_height) {
+        tia->frame_height = y + 1;
     }
 
+
     uint8_t *fb = tia->framebuffer;
-    int idx = (y * 480) + (x * 3); /* 160 * 3 bytes per scanline */
+    
+    int idx = (y * TIA_FB_WIDTH + x) * 3;
 
     if (tia->vblank & 0x02u) {
         fb[idx]     = 0;
@@ -533,11 +579,13 @@ void tia_tick_clock(TIA *tia) {
         }
         
         if (tia->frame_sync_pending) {
+            tia->completed_frame_height = tia->frame_height;
             tia->frame_ready = true;
             if (tia->audio) {
                 tia_audio_flush_frame(tia->audio);
             }
             tia->scanline = 0;
+            tia->frame_height = 0;
             tia->frame_sync_pending = false;
         }
     }
@@ -552,4 +600,12 @@ void tia_step(TIA *tia, int color_clocks) {
     for (int i = 0; i < color_clocks; i++) {
         tia_tick_clock(tia);
     }
+}
+
+
+void tia_destroy(TIA *tia) {
+    if (!tia) return;
+    free(tia->framebuffer);
+    tia->framebuffer = NULL;
+    tia->framebuffer_capacity = 0;
 }

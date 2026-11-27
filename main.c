@@ -169,6 +169,7 @@ static void emu_destroy(Emulator *emu) {
     }
     if (emu->loaded) {
         cart_free(&emu->cart);
+        tia_destroy(&emu->tia);
         emu->loaded = false;
     }
 }
@@ -302,7 +303,7 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     SDL_Color green = { 0, 255, 120, 255 };
     SDL_Color yellow = { 255, 255, 100, 255 };
     SDL_Color warn = { 255, 200, 0, 255 };
-    char header[256];
+    char header[256] = "";
 
     draw_overlay_box(renderer, 15, 15, win_w - 30, win_h - 30, 225);
     draw_text(renderer, 25, 25, header, green, 2);
@@ -428,6 +429,8 @@ int main(int argc, char **argv) {
         SDL_Quit();
         return 1;
     }
+    int texture_height = TIA_FB_HEIGHT;
+    int display_height = TIA_FB_HEIGHT;
 
     SDL_AudioSpec want, have;
     SDL_zero(want);
@@ -548,6 +551,35 @@ int main(int argc, char **argv) {
             handle_input(&emu);
             bus_step_frame(&emu.bus, &emu.cpu);
 
+            int completed_height = emu.tia.completed_frame_height;
+
+            if (completed_height > 0) {
+                if (completed_height > texture_height) {
+                    SDL_Texture *larger = SDL_CreateTexture(
+                        renderer,
+                        SDL_PIXELFORMAT_RGB24,
+                        SDL_TEXTUREACCESS_STREAMING,
+                        TIA_FB_WIDTH,
+                        completed_height
+                    );
+
+                    if (larger) {
+                        SDL_DestroyTexture(texture);
+                        texture = larger;
+                        texture_height = completed_height;
+                    } else {
+                        fprintf(stderr, "SDL texture vergroten mislukt: %s\n", SDL_GetError());
+                    }
+                }
+
+                if (completed_height <= texture_height) {
+                    SDL_Rect update_rect = {0, 0, TIA_FB_WIDTH, completed_height};
+                    SDL_UpdateTexture(texture, &update_rect, emu.tia.framebuffer,
+                                    TIA_FB_WIDTH * 3);
+                    display_height = completed_height;
+                }
+            }
+
             if (audio_dev > 0) {
                 size_t n = tia_audio_take_samples(&emu.audio, audio_tmp, 4096);
                 if (n > 0) {
@@ -565,7 +597,6 @@ int main(int argc, char **argv) {
                 }
             }
 
-            SDL_UpdateTexture(texture, NULL, emu.tia.framebuffer, TIA_FB_WIDTH * 3);
         } else {
             /* Leeg/donker scherm zolang er nog geen ROM actief is */
             uint8_t blank[TIA_FB_SIZE];
@@ -575,18 +606,28 @@ int main(int argc, char **argv) {
        
       
 
-        SDL_RenderClear(renderer);
-        int new_height = win_h * overscan;
-        int new_width = win_h;
-
-        SDL_Rect src_rect = {0, 0, win_w, win_h};
-        SDL_Rect dst_rect = {0, 0, win_w, new_height};
-
-        dst_rect.x = 0;
-        dst_rect.y = (new_width - new_height) / 2;
-
-        SDL_RenderCopy(renderer, texture, &src_rect, &dst_rect);
         SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
+
+        int src_height = display_height;
+        if (src_height > texture_height) {
+            src_height = texture_height;
+        }
+
+        int dst_height = (int)(win_h * overscan);
+        SDL_Rect src_rect = {0, 0, TIA_FB_WIDTH, src_height};
+        SDL_Rect dst_rect = {
+            0,
+            (win_h - dst_height) / 2,
+            win_w,
+            dst_height
+        };
+
+        SDL_RenderClear(renderer);
+        if (src_height > 0 &&
+            SDL_RenderCopy(renderer, texture, &src_rect, &dst_rect) < 0) {
+            fprintf(stderr, "SDL_RenderCopy fout: %s\n", SDL_GetError());
+        }
+
         overlay_render(&overlay, renderer, win_w, win_h, current_fps);
         SDL_RenderPresent(renderer);
         if (!uncapped) {
