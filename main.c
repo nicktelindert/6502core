@@ -396,6 +396,28 @@ static void ensure_rom_folder(void) {
 #endif
 }
 
+typedef struct {
+    double deadline;
+} FramePacer;
+
+static void frame_pacer_wait(FramePacer *pacer, uint64_t frame_start,
+                             uint64_t frequency, double fps) {
+    double period = (double)frequency / fps;
+    if (pacer->deadline == 0.0 || (double)frame_start > pacer->deadline + period) {
+        pacer->deadline = (double)frame_start + period;
+    } else {
+        pacer->deadline += period;
+    }
+
+    uint64_t now = SDL_GetPerformanceCounter();
+    while ((double)now < pacer->deadline) {
+        double remaining_ms = (pacer->deadline - (double)now) * 1000.0 / (double)frequency;
+        uint32_t delay_ms = (uint32_t)remaining_ms;
+        SDL_Delay(delay_ms ? delay_ms : 1);
+        now = SDL_GetPerformanceCounter();
+    }
+}
+
 int main(int argc, char **argv) {
     ensure_rom_folder();
 
@@ -478,6 +500,7 @@ int main(int argc, char **argv) {
     overlay.show_rom_menu = false;
     overlay.selected_rom_idx = 0;
     bool uncapped = false;
+    FramePacer pacer = {0};
 
     if (argc == 2) {
         emu_load_rom(&emu, argv[1]);
@@ -494,6 +517,7 @@ int main(int argc, char **argv) {
 
                 if (key == SDLK_F4 && !ev.key.repeat && emu.loaded) {
                     emu_set_video_standard(&emu, emu.standard == VIDEO_NTSC ? VIDEO_PAL : VIDEO_NTSC);
+                    pacer.deadline = 0.0;
                     if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
                     printf("Video: %s\n", emu.standard == VIDEO_PAL ? "PAL" : "NTSC");
                 }
@@ -503,6 +527,7 @@ int main(int argc, char **argv) {
                 } else if (key == SDLK_F3 && uncapped == true) {
                     uncapped = false;
                 }
+                if (key == SDLK_F3) pacer.deadline = 0.0;
                 if (overlay.show_rom_menu) {
                     if (key == SDLK_UP) {
                         if (overlay.rom_count > 0) {
@@ -521,6 +546,7 @@ int main(int argc, char **argv) {
                             snprintf(rom_path, sizeof(rom_path), "%s/%s",
                                     overlay.rom_dir, overlay.roms[overlay.selected_rom_idx]);
                             if (emu_load_rom(&emu, rom_path)) {
+                                pacer.deadline = 0.0;
                                 if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
                                 overlay.show_rom_menu = false;
                             }
@@ -640,18 +666,7 @@ int main(int argc, char **argv) {
         overlay_render(&overlay, renderer, win_w, win_h, current_fps, emu.standard);
         SDL_RenderPresent(renderer);
         if (!uncapped) {
-            double target_frame_ms = 1000.0 / video_frame_rate(emu.standard);
-            uint64_t frame_end = SDL_GetPerformanceCounter();
-            double elapsed_ms = ((double)(frame_end - frame_start) * 1000.0) / (double)perf_freq;
-            if (elapsed_ms < target_frame_ms) {
-                double remaining_ms = target_frame_ms - elapsed_ms;
-                if (remaining_ms > 2.0) {
-                    SDL_Delay((uint32_t)(remaining_ms - 1.0));
-                }
-                while ((((double)(SDL_GetPerformanceCounter() - frame_start) * 1000.0) / (double)perf_freq) < target_frame_ms) {
-                    /* Fijnafstemming van de framebegrenzer. */
-                }
-            }
+            frame_pacer_wait(&pacer, frame_start, perf_freq, video_frame_rate(emu.standard));
         }  
 
         uint64_t now = SDL_GetPerformanceCounter();

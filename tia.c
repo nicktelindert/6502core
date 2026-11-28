@@ -456,23 +456,13 @@ static void tia_render_pixel(TIA *tia, int clk) {
     int m1_x = tia->m1_x;
     int bl_x = tia->bl_x;
 
-    uint8_t pf_bits[40];
-    memset(pf_bits, 0, sizeof(pf_bits));
+    bool pf_on = false;
     if (has_pf) {
-        for (int i = 0; i < 4; i++) {
-            if ((pf0 >> (4 + i)) & 1) pf_bits[i] = 1;
-        }
-        for (int i = 0; i < 8; i++) {
-            if ((pf1 >> (7 - i)) & 1) pf_bits[4 + i] = 1;
-        }
-        for (int i = 0; i < 8; i++) {
-            if ((pf2 >> i) & 1) pf_bits[12 + i] = 1;
-        }
-        if (pf_ref) {
-            for (int i = 0; i < 20; i++) pf_bits[39 - i] = pf_bits[i];
-        } else {
-            for (int i = 0; i < 20; i++) pf_bits[20 + i] = pf_bits[i];
-        }
+        int bit = x >> 2;
+        if (bit >= 20) bit = pf_ref ? 39 - bit : bit - 20;
+        if (bit < 4) pf_on = ((pf0 >> (4 + bit)) & 1u) != 0;
+        else if (bit < 12) pf_on = ((pf1 >> (11 - bit)) & 1u) != 0;
+        else pf_on = ((pf2 >> (bit - 12)) & 1u) != 0;
     }
 
     bool p0_on = false;
@@ -509,7 +499,6 @@ static void tia_render_pixel(TIA *tia, int clk) {
     bool m1_on = m1_en && missile_pixel(x, m1_x, m1_w, lay1);
 
     bool bl_on = bl_en && (0 <= (x - bl_x) && (x - bl_x) < bl_w);
-    bool pf_on = has_pf ? (pf_bits[x >> 2] != 0) : false;
 
     if (p0_on && tia->frame_p0_top_y < 0) {
         tia->frame_p0_top_y = y;

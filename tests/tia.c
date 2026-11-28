@@ -47,6 +47,47 @@ static int pixel_is_color(const TIA *tia, int x, uint8_t color) {
     return memcmp(&tia->framebuffer[x * 3], tia->color_lut[color], 3) == 0;
 }
 
+static int expected_playfield_bit(uint8_t pf0, uint8_t pf1, uint8_t pf2,
+                                  bool reflected, int x) {
+    int bit = x / 4;
+    if (bit >= 20) bit = reflected ? 39 - bit : bit - 20;
+    if (bit < 4) return (pf0 >> (4 + bit)) & 1;
+    if (bit < 12) return (pf1 >> (11 - bit)) & 1;
+    return (pf2 >> (bit - 12)) & 1;
+}
+
+static void test_playfield_pixel_patterns(void) {
+    uint32_t random = 0x91827364u;
+    for (int pattern = 0; pattern < 256; pattern++) {
+        uint8_t values[6];
+        for (int i = 0; i < 6; i++) {
+            random = random * 1664525u + 1013904223u;
+            values[i] = (uint8_t)(random >> 24);
+        }
+        for (int reflected = 0; reflected < 2; reflected++) {
+            TIA tia;
+            setup(&tia);
+            tia_write(&tia, 0x08, 0x0E);
+            tia_write(&tia, 0x0A, (uint8_t)reflected);
+            tia_write(&tia, 0x0D, values[0]);
+            tia_write(&tia, 0x0E, values[1]);
+            tia_write(&tia, 0x0F, values[2]);
+            tia_step(&tia, 148);
+            tia_write(&tia, 0x0D, values[3]);
+            tia_write(&tia, 0x0E, values[4]);
+            tia_write(&tia, 0x0F, values[5]);
+            tia_step(&tia, 80);
+            for (int x = 0; x < 160; x++) {
+                int offset = x < 80 ? 0 : 3;
+                bool on = expected_playfield_bit(values[offset], values[offset + 1],
+                                                 values[offset + 2], reflected != 0, x);
+                CHECK(pixel_is_color(&tia, x, on ? 0x0E : 0));
+            }
+            tia_destroy(&tia);
+        }
+    }
+}
+
 static void test_pal_color_and_audio(void) {
     TIA tia;
     TIAAudio audio;
@@ -305,6 +346,7 @@ static void test_wsync(void) {
 int main(void) {
     test_reinitialization();
     test_pal_color_and_audio();
+    test_playfield_pixel_patterns();
     test_player_and_missile_copies();
     test_reflection();
     test_collisions();

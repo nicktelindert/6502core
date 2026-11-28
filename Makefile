@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -O0 -g -Wall -Wextra -std=c11
-CFLAGS_release = -O0 -Wall -Wextra -std=c11
+CFLAGS_release = -O2 -Wall -Wextra -std=c11
 
 LDFLAGS = -lSDL2
 

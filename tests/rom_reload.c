@@ -20,7 +20,25 @@ static void check_fresh_tia(const TIA *tia) {
     CHECK(tia->inpt4 == 0x80 && tia->inpt5 == 0x80);
 }
 
+static void test_frame_pacer(void) {
+    uint64_t frequency = SDL_GetPerformanceFrequency();
+    for (int standard = VIDEO_NTSC; standard <= VIDEO_PAL; standard++) {
+        FramePacer pacer = {0};
+        uint64_t start = SDL_GetPerformanceCounter();
+        for (int frame = 0; frame < 10; frame++) {
+            uint64_t frame_start = SDL_GetPerformanceCounter();
+            frame_pacer_wait(&pacer, frame_start, frequency,
+                             video_frame_rate((VideoStandard)standard));
+        }
+        double elapsed = (double)(SDL_GetPerformanceCounter() - start) / frequency;
+        double target = 10.0 / video_frame_rate((VideoStandard)standard);
+        CHECK(elapsed >= target);
+        CHECK(elapsed < target + 0.5);
+    }
+}
+
 int main(void) {
+    test_frame_pacer();
     CHECK(video_standard_from_filename("/tmp/PAL_folder/game.bin") == VIDEO_NTSC);
     CHECK(video_standard_from_filename("/tmp/game (PAL).bin") == VIDEO_PAL);
     CHECK(video_standard_from_filename("/tmp/game-pal.a26") == VIDEO_PAL);
