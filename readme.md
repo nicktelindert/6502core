@@ -24,6 +24,13 @@ Run `make test` for the CPU, Atari 2600 system, TIA, RIOT and synthetic cartridg
 
 For normal use, `make 6502core_rel` builds an optimized executable; `make 6502core` builds the unoptimized debug version. The frame limiter sleeps between frames and targets 60 Hz for NTSC or 50 Hz for PAL.
 
+## Linux AppImage
+Every push to `main` runs the tests and builds an x86-64 Linux AppImage. Download `6502core-linux-x86_64` from the corresponding GitHub Actions run's artifacts; pull requests targeting `main` and manually triggered runs also build it. Artifacts expire according to the repository's Actions retention settings and are not GitHub Releases.
+
+Extract the artifact, make the AppImage executable (`chmod +x 6502core-x86_64.AppImage`), and run it. Pass a ROM path as an argument or place ROMs in a `roms` directory in the working directory for the F2 menu. No ROMs are included. AppImage execution normally requires FUSE; `--appimage-extract-and-run` is an alternative when FUSE is unavailable.
+
+To package locally on x86-64 Linux with SDL2 development files installed, download and verify [linuxdeploy 1-alpha-20251107-1](https://github.com/linuxdeploy/linuxdeploy/releases/tag/1-alpha-20251107-1) (`linuxdeploy-x86_64.AppImage`, SHA-256 `c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d`) and [AppImage runtime 20251108](https://github.com/AppImage/type2-runtime/releases/tag/20251108) (`runtime-x86_64`, SHA-256 `2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d`). Make linuxdeploy executable and run `sh packaging/build-appimage.sh /path/to/linuxdeploy-x86_64.AppImage /path/to/runtime-x86_64 /path/to/6502core-x86_64.AppImage`. Building on a newer distribution may require a newer glibc on the target machine; CI uses Ubuntu 22.04.
+
 The standalone CPU bus test links only the CPU and addressing code and checks a full 16-bit test memory without Atari 2600 hardware.
 
 It also tests interrupt entry, priority, masking and stack behavior, representative NMOS decimal flags, and all 40,000 valid BCD ADC/SBC combinations with both carry inputs. For an additional independent test, supply the separately obtained `bin_files/6502_functional_test.bin` from [Klaus Dormann's 6502 functional tests](https://github.com/Klaus2m5/6502_65C02_functional_tests) and run `make test-functional FUNCTIONAL_ROM=/path/to/6502_functional_test.bin`. The runner expects the 64 KB image from commit `7954e2dbb49c469ea286070bf46cdd71aeb29e4b` (SHA-256 `fa12bfc761e6f9057e4cc01a665a7b800ff01ae91f598af1e39a1201d01953fd`); that test covers official instructions but not all interrupt, undocumented-opcode or cycle-level behavior.

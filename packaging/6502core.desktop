@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=6502core
+Comment=6502-based console emulator
+Exec=6502core %f
+Icon=6502core
+Terminal=false
+Categories=Game;Emulator;

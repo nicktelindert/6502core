@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  
+  <rect x="32" y="32" width="448" height="448" rx="100" fill="#18181B" />
+
+  
+  <path d="M 110 380 L 210 132 L 245 132 L 145 380 Z" fill="#EF4444" />
+  <path d="M 155 380 L 255 132 L 290 132 L 190 380 Z" fill="#F59E0B" />
+  <path d="M 200 380 L 300 132 L 335 132 L 235 380 Z" fill="#10B981" />
+  <path d="M 245 380 L 345 132 L 380 132 L 280 380 Z" fill="#3B82F6" />
+
+  
+  <rect x="76" y="196" width="360" height="120" rx="24" fill="#18181B" stroke="#F4F4F5" stroke-width="8" />
+
+  
+  <g fill="#F4F4F5">
+    <rect x="116" y="176" width="12" height="20" rx="2" />
+    <rect x="162" y="176" width="12" height="20" rx="2" />
+    <rect x="208" y="176" width="12" height="20" rx="2" />
+    <rect x="254" y="176" width="12" height="20" rx="2" />
+    <rect x="300" y="176" width="12" height="20" rx="2" />
+    <rect x="346" y="176" width="12" height="20" rx="2" />
+    <rect x="392" y="176" width="12" height="20" rx="2" />
+
+    <rect x="116" y="316" width="12" height="20" rx="2" />
+    <rect x="162" y="316" width="12" height="20" rx="2" />
+    <rect x="208" y="316" width="12" height="20" rx="2" />
+    <rect x="254" y="316" width="12" height="20" rx="2" />
+    <rect x="300" y="316" width="12" height="20" rx="2" />
+    <rect x="346" y="316" width="12" height="20" rx="2" />
+    <rect x="392" y="316" width="12" height="20" rx="2" />
+  </g>
+
+  
+  <text x="256" y="273" font-family="&#39;Courier New&#39;, monospace" font-weight="900" font-size="50" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">6502<tspan fill="#F59E0B">core</tspan></text>
+</svg>
