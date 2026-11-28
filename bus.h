@@ -7,7 +7,7 @@
 #include "cartridge.h"
 
 typedef struct TIA TIA;
-typedef struct CPU6507 CPU6507;
+typedef struct CPU6502 CPU6502;
 typedef struct Bus Bus;
 
 typedef uint8_t (*TiaReadFn)(TIA *tia, uint16_t addr);
@@ -45,6 +45,6 @@ void bus_write(Bus *bus, uint16_t address, uint8_t value);
 int bus_get_cycles_this_step(const Bus *bus);
 void bus_reset_cycles_this_step(Bus *bus);
 
-void bus_step_frame(Bus *bus, CPU6507 *cpu);
+void bus_step_frame(Bus *bus, CPU6502 *cpu);
 
 #endif /* BUS_H */

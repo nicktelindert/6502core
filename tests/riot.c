@@ -1,5 +1,5 @@
 #include "../bus.h"
-#include "../cpu6507.h"
+#include "../cpu6502.h"
 #include "../tia.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -130,7 +130,7 @@ static void test_cpu_tia_riot_timing(void) {
     TIA tia;
     RIOT riot;
     Bus bus;
-    CPU6507 cpu;
+    CPU6502 cpu;
     memset(&tia, 0, sizeof(tia));
     tia_init(&tia, NULL);
     riot_init(&riot);
@@ -186,7 +186,7 @@ static void test_cpu_timer_polling(void) {
     TIA tia;
     RIOT riot;
     Bus bus;
-    CPU6507 cpu;
+    CPU6502 cpu;
     memset(&tia, 0, sizeof(tia));
     tia_init(&tia, NULL);
     riot_init(&riot);

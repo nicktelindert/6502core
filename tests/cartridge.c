@@ -1,5 +1,5 @@
 #include "../bus.h"
-#include "../cpu6507.h"
+#include "../cpu6502.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -80,7 +80,7 @@ static void test_f6sc_hotspots(void) {
 static void test_f6sc_cpu_hotspots(void) {
     Cartridge cart;
     Bus bus;
-    CPU6507 cpu;
+    CPU6502 cpu;
     init_f6sc(&cart, &bus);
     cpu_init(&cpu, &bus);
 
@@ -108,7 +108,7 @@ static void test_f6sc_cpu_hotspots(void) {
 static void test_branch_dummy_hotspot(void) {
     Cartridge cart;
     Bus bus;
-    CPU6507 cpu;
+    CPU6502 cpu;
     init_f6sc(&cart, &bus);
     cpu_init(&cpu, &bus);
     cart.rom_data[3 * 0x1000 + 0xFF4] = 0xD0; /* BNE +2 */
@@ -127,6 +127,28 @@ static void test_branch_dummy_hotspot(void) {
     CHECK(cart.current_bank == 0);
     CHECK(bus.data_bus == 0x80);
     cart_free(&cart);
+}
+
+static void test_fe_subroutine_bank_switch(void) {
+    Cartridge cart = {0};
+    Bus bus;
+    CPU6502 cpu;
+    cart.type = CART_TYPE_FE;
+    cart.num_banks = 2;
+    bus_init(&bus, NULL, NULL, &cart, NULL, NULL, NULL);
+    cpu_init(&cpu, &bus);
+    bus.ram[0] = 0x20; /* JSR $20A0 */
+    bus.ram[1] = 0xA0;
+    bus.ram[2] = 0x20;
+    bus.ram[0x20] = 0x60; /* RTS */
+    cpu.PC = 0x0080;
+    cart.current_bank = 1;
+    CHECK(cpu_step(&cpu) == 6);
+    CHECK(cpu.PC == 0x20A0);
+    CHECK(cart.current_bank == 0);
+    CHECK(cpu_step(&cpu) == 6);
+    CHECK(cpu.PC == 0x0083);
+    CHECK(cart.current_bank == 1);
 }
 
 static void test_f6sc_all_mirrors(void) {
@@ -192,7 +214,7 @@ static void test_f6sc_shared_ram(void) {
 static void test_f6sc_bit_rom_switch(void) {
     Cartridge cart;
     Bus bus;
-    CPU6507 cpu;
+    CPU6502 cpu;
     init_f6sc(&cart, &bus);
     cpu_init(&cpu, &bus);
 
@@ -258,7 +280,7 @@ static void test_superchip_write_port_reads(void) {
 static void test_f6sc_cpu_write_port_reads(void) {
     Cartridge cart;
     Bus bus;
-    CPU6507 cpu;
+    CPU6502 cpu;
     init_f6sc(&cart, &bus);
     cpu_init(&cpu, &bus);
 
@@ -298,7 +320,7 @@ static void test_f6sc_indexed_dummy_reads(void) {
     };
     Cartridge cart;
     Bus bus;
-    CPU6507 cpu;
+    CPU6502 cpu;
     init_f6sc(&cart, &bus);
     cpu_init(&cpu, &bus);
 
@@ -347,6 +369,7 @@ int main(void) {
     test_f6sc_hotspots();
     test_f6sc_cpu_hotspots();
     test_branch_dummy_hotspot();
+    test_fe_subroutine_bank_switch();
     test_f6sc_all_mirrors();
     test_f6sc_shared_ram();
     test_f6sc_bit_rom_switch();

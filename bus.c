@@ -1,7 +1,57 @@
 #include "bus.h"
-#include "cpu6507.h"
+#include "cpu6502.h"
 #include "tia.h"
 #include "cartridge.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+static uint8_t cpu_bus_read(void *context, uint16_t address) {
+    return bus_read(context, address);
+}
+
+static void cpu_bus_write(void *context, uint16_t address, uint8_t value) {
+    bus_write(context, address, value);
+}
+
+static void cpu_bus_tick(void *context, int cycles) {
+    bus_tick(context, cycles);
+}
+
+static void cpu_bus_reset_cycles(void *context) {
+    bus_reset_cycles_this_step(context);
+}
+
+static int cpu_bus_get_cycles(void *context) {
+    return bus_get_cycles_this_step(context);
+}
+
+static void cpu_bus_jsr(void *context, uint8_t target_high) {
+    Bus *bus = context;
+    cart_fe_on_byte(bus->cart, target_high);
+}
+
+static void cpu_bus_rts(void *context, uint8_t return_high) {
+    Bus *bus = context;
+    cart_fe_on_rts_hi(bus->cart, return_high);
+}
+
+void cpu_init(CPU6502 *cpu, Bus *bus) {
+    if (!bus) {
+        fprintf(stderr, "CPU initialization requires an Atari 2600 bus\n");
+        abort();
+    }
+    CpuBus interface = {
+        .context = bus,
+        .read = cpu_bus_read,
+        .write = cpu_bus_write,
+        .tick = cpu_bus_tick,
+        .reset_cycles = cpu_bus_reset_cycles,
+        .get_cycles = cpu_bus_get_cycles,
+        .on_jsr = cpu_bus_jsr,
+        .on_rts = cpu_bus_rts,
+    };
+    cpu_init_with_bus(cpu, interface);
+}
 
 void bus_init(
     Bus *bus,
@@ -112,7 +162,7 @@ void bus_reset_cycles_this_step(Bus *bus) {
     bus->cycles_this_step = 0;
 }
 
-void bus_step_frame(Bus *bus, CPU6507 *cpu) {
+void bus_step_frame(Bus *bus, CPU6502 *cpu) {
     if (!bus || !bus->tia || !cpu) {
         return;
     }

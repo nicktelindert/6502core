@@ -1,5 +1,5 @@
-#ifndef CPU6507_H
-#define CPU6507_H
+#ifndef CPU6502_H
+#define CPU6502_H
 #ifndef ADDR_NONE
 #define ADDR_NONE 0xFFFFu
 #endif
@@ -8,7 +8,18 @@
 #include <stdbool.h>
 
 typedef struct Bus Bus;
-typedef struct CPU6507 CPU6507;
+typedef struct CPU6502 CPU6502;
+
+typedef struct {
+    void *context;
+    uint8_t (*read)(void *context, uint16_t address);
+    void (*write)(void *context, uint16_t address, uint8_t value);
+    void (*tick)(void *context, int cycles);
+    void (*reset_cycles)(void *context);
+    int (*get_cycles)(void *context);
+    void (*on_jsr)(void *context, uint8_t target_high);
+    void (*on_rts)(void *context, uint8_t return_high);
+} CpuBus;
 
 enum {
     CPU_FLAG_C = 1u << 0, /* 0x01 Carry */
@@ -21,8 +32,8 @@ enum {
     CPU_FLAG_N = 1u << 7  /* 0x80 Negative */
 };
 
-typedef uint16_t (*AddrModeFn)(CPU6507 *cpu, bool page_penalty);
-typedef void (*InstrFn)(CPU6507 *cpu, uint16_t addr);
+typedef uint16_t (*AddrModeFn)(CPU6502 *cpu, bool page_penalty);
+typedef void (*InstrFn)(CPU6502 *cpu, uint16_t addr);
 
 typedef struct {
     InstrFn exec;
@@ -31,8 +42,8 @@ typedef struct {
     bool page_penalty;
 } OpcodeEntry;
 
-struct CPU6507 {
-    Bus *bus;
+struct CPU6502 {
+    CpuBus bus;
 
     uint8_t A;
     uint8_t X;
@@ -43,6 +54,7 @@ struct CPU6507 {
 
     int extra_cycles;
     bool page_crossed;
+    bool accumulator_mode;
 
     uint16_t hist[256];
     uint8_t hist_idx;
@@ -50,8 +62,9 @@ struct CPU6507 {
     OpcodeEntry opcodes[256];
 };
 
-void cpu_init(CPU6507 *cpu, Bus *bus);
-void cpu_reset(CPU6507 *cpu);
-int cpu_step(CPU6507 *cpu);
+void cpu_init(CPU6502 *cpu, Bus *bus);
+void cpu_init_with_bus(CPU6502 *cpu, CpuBus bus);
+void cpu_reset(CPU6502 *cpu);
+int cpu_step(CPU6502 *cpu);
 
-#endif /* CPU6507_H */
+#endif /* CPU6502_H */

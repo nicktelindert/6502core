@@ -5,13 +5,22 @@ Originally, I built this project in Python and was quite happy with how it turne
 ## Architecture & Goal
 The goal of **6502core** is to provide a clean, cycle-oriented MOS 6502 CPU core (including variants like the 6507) that can drive multiple classic consoles. Right now, the focus is on the Atari lineup—starting with the Atari 2600—before expanding to other 6502-based systems.
 
+The `CPU6502` core in `cpu6502.c` accesses memory and timing through the `CpuBus` interface in `cpu6502.h`. `cpu_init_with_bus` accepts a system-specific context and callbacks for reads, writes, idle cycles and per-instruction cycle accounting; callbacks and their context must remain valid while the CPU is used. Reads and writes each account for one CPU cycle, and addresses are passed through as full 16-bit values. The existing `cpu_init` connects the Atari 2600 bus, which applies its own address mirroring and advances TIA, RIOT and cartridge timing. Optional JSR/RTS callbacks preserve the current 2600 FE cartridge behavior; they are not required for other buses.
+
+This separation is a foundation, not Atari 5200 or 7800 support. Those systems still need their own memory maps, chips, interrupt and timing behavior, and cartridge handling. The current CPU is not yet a complete or cycle-exact implementation for those machines.
+
 ## Rewritten TIA (Color-Clock Accuracy)
 After researching and documenting the hardware behavior, I rewrote the TIA to render at the **color-clock level**. This provides more accurate video and audio timing than the earlier scanline-based approach. Scanline tracking remains useful for frame bookkeeping, but it does not replace color-clock rendering.
 
 ## Tests
 Run `make test` for CPU cycle tests and synthetic F6SC/F8SC cartridge tests. The cartridge tests cover bank-switch hotspots, 6507 address mirrors, shared Superchip RAM, switching banks with a `BIT` instruction, and indexed and branch dummy reads.
 
+The standalone CPU bus test links only the CPU and addressing code and checks a full 16-bit test memory without Atari 2600 hardware.
+
 I also added extended testing for the riot timer, tia and rom reloaded because i had issues with the timing after reloaded certain roms.
+
+## Bugs
+- [ ] Dig Dug sometimes misses enemies? (timing issues?)
 
 ## Roadmap
 - [x] Rewrite core emulator from Python to C

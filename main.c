@@ -11,7 +11,7 @@
 #include "riot.h"
 #include "cartridge.h"
 #include "bus.h"
-#include "cpu6507.h"
+#include "cpu6502.h"
 #include "audio.h"
 
 #define ROM_DIR     "roms"
@@ -24,7 +24,7 @@ typedef struct {
     RIOT riot;
     Cartridge cart;
     Bus bus;
-    CPU6507 cpu;
+    CPU6502 cpu;
     bool loaded;
 } Emulator;
 
