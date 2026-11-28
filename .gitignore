@@ -12,3 +12,4 @@ tests/cartridge_test
 tests/tia_test
 tests/riot_test
 tests/rom_reload_test
+tests/rom_browser_test

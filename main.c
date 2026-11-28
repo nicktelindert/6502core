@@ -1,12 +1,11 @@
 #define _POSIX_C_SOURCE 200809L
 #include <SDL2/SDL.h>
-#include <dirent.h>
-#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <unistd.h>
 
 #include "tia.h"
 #include "riot.h"
@@ -14,10 +13,8 @@
 #include "bus.h"
 #include "cpu6502.h"
 #include "audio.h"
+#include "rom_browser.h"
 
-#define ROM_DIR     "roms"
-#define MAX_ROMS    128
-#define MAX_PATH_SZ 512
 
 typedef struct {
     TIAAudio audio;
@@ -33,10 +30,11 @@ typedef struct {
 typedef struct {
     bool show_help;
     bool show_rom_menu;
-    char rom_dir[256];
-    char **roms;
-    int rom_count;
-    int selected_rom_idx;
+    bool selecting_folder;
+    char rom_dir[ROM_PATH_MAX];
+    RomBrowser browser;
+    size_t selected_rom_idx;
+    char browser_error[256];
     char debug_lines[8][128];
     int debug_line_count;
 } OverlayState;
@@ -46,6 +44,10 @@ static const uint8_t FONT_5X7[128][7] = {
     [' '] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00},
     ['!'] = {0x04,0x04,0x04,0x04,0x04,0x00,0x04},
     ['"'] = {0x0A,0x0A,0x0A,0x00,0x00,0x00,0x00},
+    ['#'] = {0x0A,0x1F,0x0A,0x0A,0x1F,0x0A,0x00},
+    ['%'] = {0x19,0x19,0x02,0x04,0x08,0x13,0x13},
+    ['&'] = {0x0C,0x12,0x14,0x08,0x15,0x12,0x0D},
+    ['\''] = {0x04,0x04,0x08,0x00,0x00,0x00,0x00},
     ['('] = {0x02,0x04,0x08,0x08,0x08,0x04,0x02},
     [')'] = {0x08,0x04,0x02,0x02,0x02,0x04,0x08},
     ['*'] = {0x00,0x0A,0x04,0x1F,0x04,0x0A,0x00},
@@ -53,6 +55,7 @@ static const uint8_t FONT_5X7[128][7] = {
     [','] = {0x00,0x00,0x00,0x00,0x00,0x0C,0x04},
     ['-'] = {0x00,0x00,0x00,0x1F,0x00,0x00,0x00},
     ['.'] = {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C},
+    ['?'] = {0x0E,0x11,0x01,0x02,0x04,0x00,0x04},
     ['/'] = {0x01,0x02,0x04,0x08,0x10,0x00,0x00},
     ['0'] = {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E},
     ['1'] = {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E},
@@ -93,6 +96,8 @@ static const uint8_t FONT_5X7[128][7] = {
     ['X'] = {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11},
     ['Y'] = {0x11,0x11,0x0A,0x04,0x04,0x04,0x04},
     ['Z'] = {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F},
+    ['['] = {0x0E,0x08,0x08,0x08,0x08,0x08,0x0E},
+    [']'] = {0x0E,0x02,0x02,0x02,0x02,0x02,0x0E},
     ['_'] = {0x00,0x00,0x00,0x00,0x00,0x00,0x1F},
     ['a'] = {0x00,0x00,0x0E,0x01,0x0F,0x11,0x0F},
     ['b'] = {0x10,0x10,0x1E,0x11,0x11,0x11,0x1E},
@@ -252,49 +257,57 @@ static bool emu_load_rom(Emulator *emu, const char *path) {
     return true;
 }
 
-static bool has_rom_ext(const char *name) {
-    const char *dot = strrchr(name, '.');
-    if (!dot) return false;
-    return (strcmp(dot, ".bin") == 0 || strcmp(dot, ".BIN") == 0 ||
-            strcmp(dot, ".a26") == 0 || strcmp(dot, ".A26") == 0 ||
-            strcmp(dot, ".rom") == 0 || strcmp(dot, ".ROM") == 0);
-}
-
-static int cmp_str(const void *a, const void *b) {
-    const char *sa = *(const char *const *)a;
-    const char *sb = *(const char *const *)b;
-    return strcmp(sa, sb);
-}
-
-static void overlay_scan_roms(OverlayState *ov) {
-    for (int i = 0; i < ov->rom_count; ++i) free(ov->roms[i]);
-    free(ov->roms);
-    ov->roms = NULL;
-    ov->rom_count = 0;
+static bool overlay_open_browser(OverlayState *ov, const char *path, bool selecting_folder) {
+    ov->show_help = false;
+    ov->show_rom_menu = true;
+    ov->browser_error[0] = '\0';
+    if (!rom_browser_open(&ov->browser, path, selecting_folder,
+                          ov->browser_error, sizeof(ov->browser_error))) {
+        fprintf(stderr, "%s\n", ov->browser_error);
+        return false;
+    }
+    ov->selecting_folder = selecting_folder;
     ov->selected_rom_idx = 0;
+    return true;
+}
 
-    DIR *dir = opendir(ov->rom_dir);
-    if (!dir) return;
-
-    struct dirent *ent;
-    int cap = 0;
-    while ((ent = readdir(dir)) != NULL) {
-        if (ent->d_name[0] == '.') continue;
-        if (!has_rom_ext(ent->d_name)) continue;
-
-        if (ov->rom_count >= cap) {
-            cap = cap == 0 ? 16 : cap * 2;
-            char **tmp = realloc(ov->roms, (size_t)cap * sizeof(char *));
-            if (!tmp) break;
-            ov->roms = tmp;
+static bool overlay_browser_key(OverlayState *ov, SDL_Keycode key, char *rom_path, size_t path_size) {
+    RomBrowser *browser = &ov->browser;
+    if (key == SDLK_ESCAPE || key == SDLK_F2) {
+        ov->show_rom_menu = false;
+    } else if (key == SDLK_UP && browser->count) {
+        ov->selected_rom_idx = ov->selected_rom_idx ? ov->selected_rom_idx - 1 : browser->count - 1;
+    } else if (key == SDLK_DOWN && browser->count) {
+        ov->selected_rom_idx = (ov->selected_rom_idx + 1) % browser->count;
+    } else if (key == SDLK_s && ov->selecting_folder && browser->dir[0]) {
+        if (rom_config_save(browser->dir, ov->browser_error, sizeof(ov->browser_error))) {
+            strcpy(ov->rom_dir, browser->dir);
+            overlay_open_browser(ov, ov->rom_dir, false);
+        } else {
+            fprintf(stderr, "%s\n", ov->browser_error);
         }
-        ov->roms[ov->rom_count++] = strdup(ent->d_name);
+    } else if (key == SDLK_BACKSPACE || ((key == SDLK_RETURN || key == SDLK_KP_ENTER) && browser->count)) {
+        char path[ROM_PATH_MAX];
+        bool parent = key == SDLK_BACKSPACE;
+        if (parent) {
+            int n = snprintf(path, sizeof(path), "%s/..", browser->dir);
+            if (n < 0 || (size_t)n >= sizeof(path)) {
+                snprintf(ov->browser_error, sizeof(ov->browser_error), "Path is too long");
+                return false;
+            }
+        } else if (!rom_browser_path(browser, ov->selected_rom_idx, path, sizeof(path))) {
+            snprintf(ov->browser_error, sizeof(ov->browser_error), "Path is too long");
+            return false;
+        }
+        if (parent || browser->entries[ov->selected_rom_idx].is_dir) {
+            overlay_open_browser(ov, path, ov->selecting_folder);
+        } else if (snprintf(rom_path, path_size, "%s", path) >= (int)path_size) {
+            snprintf(ov->browser_error, sizeof(ov->browser_error), "Path is too long");
+        } else {
+            return true;
+        }
     }
-    closedir(dir);
-
-    if (ov->rom_count > 1) {
-        qsort(ov->roms, (size_t)ov->rom_count, sizeof(char *), cmp_str);
-    }
+    return false;
 }
 
 static void overlay_draw_fps(SDL_Renderer *renderer, double fps, int win_w, VideoStandard standard) {
@@ -308,7 +321,7 @@ static void overlay_draw_help(OverlayState *ov, SDL_Renderer *renderer, int win_
     SDL_Color green = { 0, 255, 120, 255 };
 
     draw_overlay_box(renderer, 15, 15, win_w - 30, 70, 225);
-    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | F3: Frame limit | F4: PAL/NTSC | ESC: Quit", green, 2);
+    draw_text(renderer, 25, 25, "F1: Help F2: ROMs F3: Frame limit F4: PAL/NTSC F5: ROM folder", green, 2);
     draw_text(renderer, 25, 55, "ASWD: Movement CTRL/SHIFT: Fire/Reset", green, 2);
 
 
@@ -322,29 +335,37 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     SDL_Color green = { 0, 255, 120, 255 };
     SDL_Color yellow = { 255, 255, 100, 255 };
     SDL_Color warn = { 255, 200, 0, 255 };
-    char header[256] = "Select ROM";
-
     draw_overlay_box(renderer, 15, 15, win_w - 30, win_h - 30, 225);
-    draw_text(renderer, 25, 25, header, green, 2);
-
-    if (ov->rom_count == 0) {
-        draw_text(renderer, 25, 65, "No roms found in ./roms", warn, 2);
+    draw_text(renderer, 25, 25, ov->selecting_folder ? "Select ROM folder" : "Select ROM", green, 2);
+    size_t visible = win_w > 50 ? (size_t)(win_w - 50) / 12 : 1;
+    const char *dir = ov->browser.dir;
+    size_t len = strlen(dir);
+    if (len > visible) dir += len - visible;
+    draw_text(renderer, 25, 48, dir, green, 2);
+    draw_text(renderer, 25, win_h - 80,
+              ov->selecting_folder ? "ENTER: open  S: select folder  BACKSPACE: up" :
+                                     "ENTER: open  BACKSPACE: up  F5: ROM folder", green, 2);
+    draw_text(renderer, 25, win_h - 58, "ESC: close", green, 2);
+    if (ov->browser_error[0]) draw_text(renderer, 25, win_h - 36, ov->browser_error, warn, 1);
+    if (!ov->browser.count) {
+        draw_text(renderer, 25, 80, "No entries", warn, 2);
         return;
     }
-
-    int max_lines = (win_h - 95) / 22;
+    int max_lines = (win_h - 170) / 22;
     if (max_lines < 1) max_lines = 1;
-    int start = ov->selected_rom_idx - max_lines / 2;
+    int start = (int)ov->selected_rom_idx - max_lines / 2;
     if (start < 0) start = 0;
-    if (start > ov->rom_count - max_lines) start = ov->rom_count - max_lines;
+    if ((size_t)(start + max_lines) > ov->browser.count) start = (int)ov->browser.count - max_lines;
     if (start < 0) start = 0;
 
-    for (int i = 0; i < max_lines && (start + i) < ov->rom_count; ++i) {
-        int idx = start + i;
+    for (int i = 0; i < max_lines && (size_t)(start + i) < ov->browser.count; ++i) {
+        size_t idx = (size_t)(start + i);
         bool selected = (idx == ov->selected_rom_idx);
-        char line[300];
-        snprintf(line, sizeof(line), "%s%s", selected ? "> " : "  ", ov->roms[idx]);
-        draw_text(renderer, 25, 60 + i * 22, line, selected ? yellow : green, 2);
+        char line[ROM_PATH_MAX + 8];
+        snprintf(line, sizeof(line), "%s%s%s", selected ? "> " : "  ",
+                 ov->browser.entries[idx].is_dir ? "/ " : "  ", ov->browser.entries[idx].name);
+        if (visible < strlen(line)) line[visible] = '\0';
+        draw_text(renderer, 25, 80 + i * 22, line, selected ? yellow : green, 2);
     }
 }
 
@@ -361,11 +382,17 @@ static void overlay_render(OverlayState *ov, SDL_Renderer *renderer, int win_w, 
 }
 
 
-static void handle_input(Emulator *emu) {
+static void handle_input(Emulator *emu, bool active) {
     if (!emu || !emu->loaded) {
         return;
     }
 
+    if (!active) {
+        emu->riot.swcha = 0xFFu;
+        emu->riot.swchb = 0x0Bu;
+        emu->tia.inpt4 = 0x80u;
+        return;
+    }
     const uint8_t *keys = SDL_GetKeyboardState(NULL);
 
     uint8_t swcha = 0xFFu;
@@ -386,14 +413,6 @@ static void handle_input(Emulator *emu) {
         swchb &= (uint8_t)~0x01u; /* Reset */
     }
     emu->riot.swchb = swchb;
-}
-
-static void ensure_rom_folder(void) {
-#ifdef _WIN32
-    _mkdir(ROM_DIR);
-#else
-    mkdir(ROM_DIR, 0755);
-#endif
 }
 
 typedef struct {
@@ -419,8 +438,6 @@ static void frame_pacer_wait(FramePacer *pacer, uint64_t frame_start,
 }
 
 int main(int argc, char **argv) {
-    ensure_rom_folder();
-
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
         fprintf(stderr, "SDL_Init fout: %s\n", SDL_GetError());
         return 1;
@@ -495,16 +512,26 @@ int main(int argc, char **argv) {
     bool running = true;
     const uint64_t perf_freq = SDL_GetPerformanceFrequency();
     OverlayState overlay = {0};
-    snprintf(overlay.rom_dir, sizeof(overlay.rom_dir), "roms");
-    overlay.show_help = false;
-    overlay.show_rom_menu = false;
-    overlay.selected_rom_idx = 0;
     bool uncapped = false;
     FramePacer pacer = {0};
 
     if (argc == 2) {
         emu_load_rom(&emu, argv[1]);
-        overlay.show_rom_menu = false;
+    }
+    char config_error[256] = {0};
+    RomConfigResult config_result = rom_config_load(overlay.rom_dir, sizeof(overlay.rom_dir),
+                                                    config_error, sizeof(config_error));
+    if (config_result != ROM_CONFIG_OK) {
+        overlay.rom_dir[0] = '\0';
+        const char *home = getenv("HOME");
+        if (!home || home[0] != '/') home = ".";
+        if (!overlay_open_browser(&overlay, home, true)) {
+            overlay_open_browser(&overlay, "/", true);
+        }
+        if (config_result == ROM_CONFIG_ERROR) {
+            fprintf(stderr, "%s\n", config_error);
+            snprintf(overlay.browser_error, sizeof(overlay.browser_error), "%s", config_error);
+        }
     }
     
     while (running) {
@@ -512,6 +539,7 @@ int main(int argc, char **argv) {
         SDL_Event ev;
 
         while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_QUIT) running = false;
             if (ev.type == SDL_KEYDOWN) {
                 SDL_Keycode key = ev.key.keysym.sym;
 
@@ -528,31 +556,21 @@ int main(int argc, char **argv) {
                     uncapped = false;
                 }
                 if (key == SDLK_F3) pacer.deadline = 0.0;
-                if (overlay.show_rom_menu) {
-                    if (key == SDLK_UP) {
-                        if (overlay.rom_count > 0) {
-                            overlay.selected_rom_idx--;
-                            if (overlay.selected_rom_idx < 0) {
-                                overlay.selected_rom_idx = overlay.rom_count - 1;
-                            }
+                if (key == SDLK_F5 && !ev.key.repeat) {
+                    const char *dir = overlay.rom_dir[0] ? overlay.rom_dir : overlay.browser.dir;
+                    if (!dir[0]) dir = "/";
+                    overlay_open_browser(&overlay, dir, true);
+                } else if (overlay.show_rom_menu) {
+                    char rom_path[ROM_PATH_MAX];
+                    if (overlay_browser_key(&overlay, key, rom_path, sizeof(rom_path))) {
+                        if (emu_load_rom(&emu, rom_path)) {
+                            pacer.deadline = 0.0;
+                            if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
+                            overlay.show_rom_menu = false;
+                        } else {
+                            snprintf(overlay.browser_error, sizeof(overlay.browser_error), "Unable to load ROM");
+                            fprintf(stderr, "Unable to load ROM: %s\n", rom_path);
                         }
-                    } else if (key == SDLK_DOWN) {
-                        if (overlay.rom_count > 0) {
-                            overlay.selected_rom_idx = (overlay.selected_rom_idx +1) % overlay.rom_count;
-                        }
-                    } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-                        if (overlay.rom_count > 0) {
-                            char rom_path[520];
-                            snprintf(rom_path, sizeof(rom_path), "%s/%s",
-                                    overlay.rom_dir, overlay.roms[overlay.selected_rom_idx]);
-                            if (emu_load_rom(&emu, rom_path)) {
-                                pacer.deadline = 0.0;
-                                if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
-                                overlay.show_rom_menu = false;
-                            }
-                        }
-                    } else if (key == SDLK_F2 || key == SDLK_ESCAPE) {
-                        overlay.show_rom_menu = false;
                     }
                 } else {
                     
@@ -568,9 +586,8 @@ int main(int argc, char **argv) {
                     
                     }
                     else if (key == SDLK_F2) {
-                        overlay.show_help = false;
-                        overlay.show_rom_menu = true;
-                        overlay_scan_roms(&overlay);
+                        const char *dir = overlay.rom_dir[0] ? overlay.rom_dir : "/";
+                        overlay_open_browser(&overlay, dir, false);
                     }
 
                 }
@@ -581,11 +598,12 @@ int main(int argc, char **argv) {
 
 
         if (emu.loaded) {
-            handle_input(&emu);
+            handle_input(&emu, !overlay.show_rom_menu);
             if (!bus_step_frame(&emu.bus, &emu.cpu)) {
                 fprintf(stderr, "Frame synchronization failed for %s (PC=%04X, scanline=%d)\n",
                         emu.cart.name, emu.cpu.PC, emu.tia.scanline);
                 emu_destroy(&emu);
+                rom_browser_free(&overlay.browser);
                 if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
                 continue;
             }

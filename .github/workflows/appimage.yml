@@ -54,3 +54,26 @@ jobs:
           name: 6502core-linux-x86_64
           path: ${{ runner.temp }}/6502core-x86_64.AppImage
           if-no-files-found: error
+          overwrite: true
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: appimage
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: 6502core-linux-x86_64
+          path: ${{ runner.temp }}/release
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: main-${{ github.run_id }}
+          target_commitish: ${{ github.sha }}
+          name: Build main-${{ github.run_id }}
+          body: "Automated build for commit ${{ github.sha }}."
+          files: ${{ runner.temp }}/release/6502core-x86_64.AppImage
+          fail_on_unmatched_files: true

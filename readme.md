@@ -24,10 +24,15 @@ Run `make test` for the CPU, Atari 2600 system, TIA, RIOT and synthetic cartridg
 
 For normal use, `make 6502core_rel` builds an optimized executable; `make 6502core` builds the unoptimized debug version. The frame limiter sleeps between frames and targets 60 Hz for NTSC or 50 Hz for PAL.
 
-## Linux AppImage
-Every push to `main` runs the tests and builds an x86-64 Linux AppImage. Download `6502core-linux-x86_64` from the corresponding GitHub Actions run's artifacts; pull requests targeting `main` and manually triggered runs also build it. Artifacts expire according to the repository's Actions retention settings and are not GitHub Releases.
+## ROM browser
+On first start, select a ROM folder in the built-in browser. Use the up/down arrows to select a directory, Enter to open it, Backspace to go up, and **S** to save the current folder. Escape closes the browser without saving; press **F5** to choose or change the folder later.
 
-Extract the artifact, make the AppImage executable (`chmod +x 6502core-x86_64.AppImage`), and run it. Pass a ROM path as an argument or place ROMs in a `roms` directory in the working directory for the F2 menu. No ROMs are included. AppImage execution normally requires FUSE; `--appimage-extract-and-run` is an alternative when FUSE is unavailable.
+Press **F2** to browse the saved folder and load a ROM. The browser also allows navigation outside that folder to select individual `.bin`, `.a26` or `.rom` files. Opening a ROM does not change the saved folder. The setting is stored in `~/.config/6502core/config.ini`, or `$XDG_CONFIG_HOME/6502core/config.ini` when `XDG_CONFIG_HOME` is set to an absolute path. If the saved folder is unavailable, choose it again on startup. A ROM can still be passed as a command-line argument. The built-in bitmap font displays non-ASCII filename characters as `?`, but the original filename is used when opening the file.
+
+## Linux AppImage
+Every push to `main` runs the tests, builds an x86-64 Linux AppImage and publishes a GitHub Release tagged `main-<workflow run ID>` at the pushed commit. Each push gets a separate release; rerunning the same workflow updates its existing release. Download `6502core-x86_64.AppImage` from the release's assets. Pull requests targeting `main` and manually triggered runs build an Actions artifact but do not publish a release. Actions artifacts expire according to the repository's retention settings.
+
+Make the downloaded AppImage executable (`chmod +x 6502core-x86_64.AppImage`) and run it. If downloading an Actions artifact instead, first extract its ZIP archive. Choose a ROM folder on first start, use F2 to browse for a ROM, or pass a ROM path as an argument. No ROMs are included. AppImage execution normally requires FUSE; `--appimage-extract-and-run` is an alternative when FUSE is unavailable.
 
 To package locally on x86-64 Linux with SDL2 development files installed, download and verify [linuxdeploy 1-alpha-20251107-1](https://github.com/linuxdeploy/linuxdeploy/releases/tag/1-alpha-20251107-1) (`linuxdeploy-x86_64.AppImage`, SHA-256 `c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d`) and [AppImage runtime 20251108](https://github.com/AppImage/type2-runtime/releases/tag/20251108) (`runtime-x86_64`, SHA-256 `2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d`). Make linuxdeploy executable and run `sh packaging/build-appimage.sh /path/to/linuxdeploy-x86_64.AppImage /path/to/runtime-x86_64 /path/to/6502core-x86_64.AppImage`. Building on a newer distribution may require a newer glibc on the target machine; CI uses Ubuntu 22.04.
 
