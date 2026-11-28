@@ -212,11 +212,91 @@ static void emu_set_video_standard(Emulator *emu, VideoStandard standard) {
     cart_set_video_standard(&emu->cart, standard);
 }
 
-static bool is_5200_rom(const char *path) {
-    const char *base = strrchr(path, '/');
-    const char *ext = strrchr(base ? base + 1 : path, '.');
-    return ext && ext[1] && ext[2] && ext[3] && !ext[4] &&
-           tolower((unsigned char)ext[1]) == 'a' && ext[2] == '5' && ext[3] == '2';
+typedef enum {
+    ROM_SYSTEM_UNKNOWN,
+    ROM_SYSTEM_2600,
+    ROM_SYSTEM_5200,
+    ROM_SYSTEM_ERROR
+} RomSystem;
+
+typedef enum {
+    ROM_OPEN_OK,
+    ROM_OPEN_CANCELLED,
+    ROM_OPEN_ERROR
+} RomOpenResult;
+
+static RomSystem detect_rom_system(const uint8_t *data, size_t size) {
+    bool size5200 = size == 0x1000 || size == 0x2000 ||
+                    size == 0x4000 || size == 0x8000;
+    if (size < 6) return ROM_SYSTEM_UNKNOWN;
+    uint16_t start5200 = (uint16_t)(data[size - 2] | ((uint16_t)data[size - 1] << 8));
+    uint16_t reset2600 = (uint16_t)(data[size - 4] | ((uint16_t)data[size - 3] << 8));
+    bool possible5200 = size5200 && start5200 >= 0x4000 && start5200 < 0xc000;
+    unsigned io_count = 0, io_chips = 0;
+    /* A plausible vector alone is ambiguous; require references to multiple 5200 chips. */
+    if (possible5200) {
+        for (size_t i = 0; i + 2 < size; i++) {
+            switch (data[i]) {
+                case 0x8d: case 0x8e: case 0x8c: case 0xad: case 0xae:
+                case 0xac: case 0x2c: case 0x9d: case 0x99: case 0xbd: case 0xb9:
+                    break;
+                default: continue;
+            }
+            uint16_t address = (uint16_t)(data[i + 1] | ((uint16_t)data[i + 2] << 8));
+            unsigned chip = address >= 0xc000 && address <= 0xc01f ? 1u :
+                            address >= 0xd400 && address <= 0xd40f ? 2u :
+                            address >= 0xe800 && address <= 0xe80f ? 4u : 0u;
+            if (chip) { io_count++; io_chips |= chip; }
+        }
+        if (io_count >= 4 && (io_chips & (io_chips - 1u)) != 0)
+            return ROM_SYSTEM_5200;
+        return ROM_SYSTEM_UNKNOWN;
+    }
+    if (size >= 0x800 && reset2600 != 0xffffu && (reset2600 & 0x1000u) != 0)
+        return ROM_SYSTEM_2600;
+    return ROM_SYSTEM_UNKNOWN;
+}
+
+static bool detect_rom_file(const char *path, RomSystem *system, char *error, size_t error_size) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        snprintf(error, error_size, "Unable to open ROM");
+        return false;
+    }
+    uint8_t data[0x8001];
+    size_t size = fread(data, 1, sizeof(data), f);
+    bool read_error = ferror(f) != 0;
+    int close_result = fclose(f);
+    if (read_error || close_result != 0) {
+        snprintf(error, error_size, "Unable to read ROM");
+        return false;
+    }
+    if (size == 0) {
+        snprintf(error, error_size, "ROM is empty");
+        return false;
+    }
+    *system = size == sizeof(data) ? ROM_SYSTEM_UNKNOWN : detect_rom_system(data, size);
+    return true;
+}
+
+static RomSystem choose_rom_system(SDL_Window *window) {
+    const SDL_MessageBoxButtonData buttons[] = {
+        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Cancel"},
+        {0, 1, "Atari 2600"},
+        {0, 2, "Atari 5200"}
+    };
+    const SDL_MessageBoxData dialog = {
+        SDL_MESSAGEBOX_INFORMATION, window, "Choose system",
+        "Cannot reliably identify this ROM. Which system is it for?",
+        3, buttons, NULL
+    };
+    int selected = 0;
+    if (SDL_ShowMessageBox(&dialog, &selected) < 0) {
+        fprintf(stderr, "Unable to show system selection: %s\n", SDL_GetError());
+        return ROM_SYSTEM_ERROR;
+    }
+    return selected == 1 ? ROM_SYSTEM_2600 :
+           selected == 2 ? ROM_SYSTEM_5200 : ROM_SYSTEM_UNKNOWN;
 }
 
 static bool emu_load_5200(Emulator *emu, const char *path) {
@@ -255,7 +335,12 @@ static bool emu_load_5200(Emulator *emu, const char *path) {
     switch (size) {
         case 0x1000: type = SYSTEM5200_CART_4K; break;
         case 0x2000: type = SYSTEM5200_CART_8K; break;
-        case 0x4000: type = SYSTEM5200_CART_16K; break;
+        case 0x4000: {
+            uint16_t entry = (uint16_t)(bytes[0x3ffe] | ((uint16_t)bytes[0x3fff] << 8));
+            type = entry >= 0x4000 && entry < 0x8000
+                ? SYSTEM5200_CART_16K_EE : SYSTEM5200_CART_16K;
+            break;
+        }
         case 0x8000: type = SYSTEM5200_CART_32K; break;
         default:
             snprintf(emu->load_error, sizeof(emu->load_error), "Unsupported 5200 ROM size");
@@ -284,14 +369,20 @@ static bool emu_load_5200(Emulator *emu, const char *path) {
     emu->warned_5200 = false;
     emu->loaded = true;
     if (size == 0x4000)
-        fprintf(stderr, "5200: using standard 16K layout; EE layout is not selected automatically\n");
+        fprintf(stderr, "5200: using %s 16K layout (selected from entry address)\n",
+                type == SYSTEM5200_CART_16K_EE ? "two-chip" : "standard");
     printf("Loaded experimental 5200 ROM: %s\n", path);
     return true;
 }
 
-static bool emu_load_rom(Emulator *emu, const char *path) {
+static bool emu_load_rom(Emulator *emu, const char *path, RomSystem system) {
     emu->load_error[0] = '\0';
-    if (is_5200_rom(path)) return emu_load_5200(emu, path);
+    if (system == ROM_SYSTEM_5200) return emu_load_5200(emu, path);
+    if (system != ROM_SYSTEM_2600) {
+        snprintf(emu->load_error, sizeof(emu->load_error), "ROM system not selected");
+        fprintf(stderr, "%s\n", emu->load_error);
+        return false;
+    }
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "Unable to open rom: %s\n", path);
@@ -351,6 +442,23 @@ static bool emu_load_rom(Emulator *emu, const char *path) {
     printf("Geladen: %s [%s]\n", emu->cart.name,
            emu->standard == VIDEO_PAL ? "PAL" : "NTSC");
     return true;
+}
+
+static RomOpenResult emu_open_rom(Emulator *emu, const char *path, SDL_Window *window,
+                                 RomSystem (*choose)(SDL_Window *)) {
+    RomSystem system;
+    emu->load_error[0] = '\0';
+    if (!detect_rom_file(path, &system, emu->load_error, sizeof(emu->load_error))) {
+        fprintf(stderr, "%s: %s\n", emu->load_error, path);
+        return ROM_OPEN_ERROR;
+    }
+    if (system == ROM_SYSTEM_UNKNOWN) system = choose(window);
+    if (system == ROM_SYSTEM_ERROR) {
+        snprintf(emu->load_error, sizeof(emu->load_error), "Unable to show system selection");
+        return ROM_OPEN_ERROR;
+    }
+    if (system == ROM_SYSTEM_UNKNOWN) return ROM_OPEN_CANCELLED;
+    return emu_load_rom(emu, path, system) ? ROM_OPEN_OK : ROM_OPEN_ERROR;
 }
 
 static bool emu_step_5200_frame(Emulator *emu) {
@@ -708,7 +816,8 @@ int main(int argc, char **argv) {
     FramePacer pacer = {0};
 
     if (argc == 2) {
-        emu_load_rom(&emu, argv[1]);
+        if (emu_open_rom(&emu, argv[1], window, choose_rom_system) == ROM_OPEN_ERROR)
+            fprintf(stderr, "Unable to load ROM: %s\n", argv[1]);
     }
     char config_error[256] = {0};
     RomConfigResult config_result = rom_config_load(overlay.rom_dir, sizeof(overlay.rom_dir),
@@ -775,14 +884,17 @@ int main(int argc, char **argv) {
                     if (overlay_browser_key(&overlay, key, rom_path, sizeof(rom_path))) {
                         if (overlay.selecting_bios) {
                             overlay_select_bios(&overlay, rom_path);
-                        } else if (emu_load_rom(&emu, rom_path)) {
-                            pacer.deadline = 0.0;
-                            if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
-                            overlay.show_rom_menu = false;
                         } else {
-                            snprintf(overlay.browser_error, sizeof(overlay.browser_error), "%s",
-                                     emu.load_error[0] ? emu.load_error : "Unable to load ROM");
-                            fprintf(stderr, "Unable to load ROM: %s\n", rom_path);
+                            RomOpenResult result = emu_open_rom(&emu, rom_path, window, choose_rom_system);
+                            if (result == ROM_OPEN_OK) {
+                                pacer.deadline = 0.0;
+                                if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
+                                overlay.show_rom_menu = false;
+                            } else if (result == ROM_OPEN_ERROR) {
+                                snprintf(overlay.browser_error, sizeof(overlay.browser_error), "%s",
+                                         emu.load_error[0] ? emu.load_error : "Unable to load ROM");
+                                fprintf(stderr, "Unable to load ROM: %s\n", rom_path);
+                            }
                         }
                     }
                 } else {

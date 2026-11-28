@@ -123,6 +123,12 @@ int main(void) {
     CHECK(cpu_step(&cpu) == 2);
     CHECK(bus.cycles == 2);
 
+    cpu.PC = 0x8100;
+    bus.memory[0x8100] = 0xFF;
+    bus.memory[0x8101] = 0xEA;
+    CHECK(cpu_step(&cpu) == 2);
+    CHECK(cpu.PC == 0x8101 && bus.access_count == 1 && bus.addresses[0] == 0x8100);
+
     cpu.PC = 0x80FD;
     cpu.status &= (uint8_t)~CPU_FLAG_Z;
     bus.memory[0x80FD] = 0xD0; /* BNE +2, crossing to $8101 */

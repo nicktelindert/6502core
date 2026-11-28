@@ -1,6 +1,5 @@
 #define _XOPEN_SOURCE 700
 #include "rom_browser.h"
-#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -222,17 +221,6 @@ void rom_browser_free(RomBrowser *browser) {
     memset(browser, 0, sizeof(*browser));
 }
 
-static bool is_rom(const char *name) {
-    const char *ext = strrchr(name, '.');
-    if (!ext) return false;
-    char lower[5];
-    size_t n = strlen(ext);
-    if (n >= sizeof(lower)) return false;
-    for (size_t i = 0; i <= n; i++) lower[i] = (char)tolower((unsigned char)ext[i]);
-    return strcmp(lower, ".bin") == 0 || strcmp(lower, ".a26") == 0 ||
-           strcmp(lower, ".a52") == 0 || strcmp(lower, ".rom") == 0;
-}
-
 static int compare_entries(const void *a, const void *b) {
     const RomBrowserEntry *x = a, *y = b;
     if (strcmp(x->name, "..") == 0) return strcmp(y->name, "..") == 0 ? 0 : -1;
@@ -283,8 +271,7 @@ bool rom_browser_open_filtered(RomBrowser *browser, const char *path, BrowserFil
             continue;
         }
         bool is_dir = S_ISDIR(st.st_mode);
-        if (!is_dir && (!S_ISREG(st.st_mode) || filter == BROWSER_DIRECTORIES ||
-                        (filter == BROWSER_ROMS && !is_rom(entry->d_name)))) continue;
+        if (!is_dir && (!S_ISREG(st.st_mode) || filter == BROWSER_DIRECTORIES)) continue;
         if (next.count == capacity) {
             size_t new_capacity = capacity ? capacity * 2 : 16;
             RomBrowserEntry *items = realloc(next.entries, new_capacity * sizeof(*items));

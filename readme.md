@@ -20,7 +20,7 @@ make 6502core_rel
 ./6502core_rel
 ```
 
-You can also pass a ROM file as an argument. On first launch, choose a ROM folder in the browser. Use the arrow keys and Enter to navigate, Backspace to go up, and **S** to save the folder. **F2** opens a game; **F5** changes the folder.
+You can also pass a ROM file as an argument. On first launch, choose a ROM folder in the browser. Use the arrow keys and Enter to navigate, Backspace to go up, and **S** to save the folder. **F2** opens a game; **F5** changes the folder. All files are shown, including games without an extension. The emulator identifies the system from the ROM where possible and asks you to choose when unsure.
 
 ## Controls
 
@@ -40,9 +40,9 @@ You can also pass a ROM file as an argument. On first launch, choose a ROM folde
 
 ## Atari 5200
 
-Before opening an `.a52` game, press **F6** and select your own 2048-byte Atari 5200 BIOS. The selection is saved for next time.
+Before opening a 5200 game, press **F6** and select your own 2048-byte Atari 5200 BIOS. The selection is saved for next time.
 
-5200 support is still experimental: picture, sound, controls and compatibility may not be correct in every game. The loader supports raw 4, 8, 16 and 32 KB games; some cartridge layouts are not supported.
+5200 support is still experimental: picture, sound, controls and compatibility may not be correct in every game. The loader supports raw 4, 8, 16 and 32 KB games. It selects a 16 KB layout from the game's start address, which may not work for every game; some cartridge layouts are not supported.
 
 ## Video standard
 

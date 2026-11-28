@@ -163,6 +163,94 @@ static void test_browser_keys(void) {
     CHECK(rmdir(path) == 0 && rmdir(config) == 0 && rmdir(tmp) == 0);
 }
 
+static RomSystem selected_system;
+static unsigned selection_count;
+
+static RomSystem test_choose_system(SDL_Window *window) {
+    (void)window;
+    selection_count++;
+    return selected_system;
+}
+
+static void test_rom_system_detection(void) {
+    uint8_t data[0x4000] = {0};
+    CHECK(detect_rom_system(data, sizeof(data)) == ROM_SYSTEM_UNKNOWN);
+    CHECK(detect_rom_system(data, 5) == ROM_SYSTEM_UNKNOWN);
+    memset(data, 0xff, sizeof(data));
+    CHECK(detect_rom_system(data, sizeof(data)) == ROM_SYSTEM_UNKNOWN);
+    memset(data, 0, sizeof(data));
+    data[0x3ffc] = 0x00; data[0x3ffd] = 0xf0;
+    CHECK(detect_rom_system(data, sizeof(data)) == ROM_SYSTEM_2600);
+    data[0x3ffe] = 0x00; data[0x3fff] = 0x90;
+    CHECK(detect_rom_system(data, sizeof(data)) == ROM_SYSTEM_UNKNOWN);
+    static const uint8_t io[] = {
+        0x8d, 0x1a, 0xc0, 0xad, 0x0b, 0xd4,
+        0x8d, 0x00, 0xd4, 0xad, 0x0f, 0xe8
+    };
+    memcpy(data, io, 3);
+    memcpy(data + 3, io, 3);
+    memcpy(data + 6, io, 3);
+    memcpy(data + 9, io, 3);
+    CHECK(detect_rom_system(data, sizeof(data)) == ROM_SYSTEM_UNKNOWN);
+    memcpy(data, io, sizeof(io));
+    CHECK(detect_rom_system(data, sizeof(data)) == ROM_SYSTEM_5200);
+    data[0x3fff] = 0xf0;
+    CHECK(detect_rom_system(data, sizeof(data)) == ROM_SYSTEM_2600);
+
+    char tmp[] = "/tmp/6502core-detect-XXXXXX";
+    CHECK(mkdtemp(tmp) != NULL);
+    char bios[ROM_PATH_MAX], path[ROM_PATH_MAX], config[ROM_PATH_MAX], error[256];
+    CHECK(snprintf(bios, sizeof(bios), "%s/bios", tmp) < (int)sizeof(bios));
+    CHECK(snprintf(path, sizeof(path), "%s/rom.a26", tmp) < (int)sizeof(path));
+    CHECK(snprintf(config, sizeof(config), "%s/config", tmp) < (int)sizeof(config));
+    CHECK(setenv("XDG_CONFIG_HOME", config, 1) == 0);
+    uint8_t firmware[2048] = {0};
+    firmware[0x7fd] = 0xf8;
+    FILE *f = fopen(bios, "wb");
+    CHECK(f && fwrite(firmware, 1, sizeof(firmware), f) == sizeof(firmware) && fclose(f) == 0);
+    CHECK(bios_config_save(bios, error, sizeof(error)));
+    data[0x3fff] = 0x90;
+    f = fopen(path, "wb");
+    CHECK(f && fwrite(data, 1, sizeof(data), f) == sizeof(data) && fclose(f) == 0);
+    Emulator emu = {0};
+    selection_count = 0;
+    CHECK(emu_open_rom(&emu, path, NULL, test_choose_system) == ROM_OPEN_OK);
+    CHECK(emu.loaded && emu.is_5200 && selection_count == 0);
+    CHECK(unlink(path) == 0);
+    CHECK(snprintf(path, sizeof(path), "%s/rom.a52", tmp) < (int)sizeof(path));
+    memset(data, 0, sizeof(data));
+    data[0x3ffc] = 0; data[0x3ffd] = 0xf0;
+    f = fopen(path, "wb");
+    CHECK(f && fwrite(data, 1, sizeof(data), f) == sizeof(data) && fclose(f) == 0);
+    CHECK(emu_open_rom(&emu, path, NULL, test_choose_system) == ROM_OPEN_OK);
+    CHECK(emu.loaded && !emu.is_5200 && selection_count == 0);
+    CHECK(unlink(path) == 0);
+    CHECK(snprintf(path, sizeof(path), "%s/rom", tmp) < (int)sizeof(path));
+    memset(data, 0, sizeof(data));
+    f = fopen(path, "wb");
+    CHECK(f && fwrite(data, 1, sizeof(data), f) == sizeof(data) && fclose(f) == 0);
+    selected_system = ROM_SYSTEM_UNKNOWN;
+    CHECK(emu_open_rom(&emu, path, NULL, test_choose_system) == ROM_OPEN_CANCELLED);
+    CHECK(emu.loaded && !emu.is_5200 && selection_count == 1);
+    selected_system = ROM_SYSTEM_ERROR;
+    CHECK(emu_open_rom(&emu, path, NULL, test_choose_system) == ROM_OPEN_ERROR);
+    CHECK(emu.loaded && !emu.is_5200 && selection_count == 2 && emu.load_error[0]);
+    selected_system = ROM_SYSTEM_5200;
+    CHECK(emu_open_rom(&emu, path, NULL, test_choose_system) == ROM_OPEN_OK);
+    CHECK(emu.loaded && emu.is_5200 && selection_count == 3);
+    selected_system = ROM_SYSTEM_2600;
+    CHECK(emu_open_rom(&emu, path, NULL, test_choose_system) == ROM_OPEN_OK);
+    CHECK(emu.loaded && !emu.is_5200 && selection_count == 4);
+    CHECK(emu_open_rom(&emu, "/missing-rom", NULL, test_choose_system) == ROM_OPEN_ERROR);
+    CHECK(emu.loaded && !emu.is_5200 && selection_count == 4);
+    emu_destroy(&emu);
+    CHECK(unlink(path) == 0 && unlink(bios) == 0);
+    CHECK(snprintf(path, sizeof(path), "%s/6502core/config.ini", config) < (int)sizeof(path));
+    CHECK(unlink(path) == 0);
+    CHECK(snprintf(path, sizeof(path), "%s/6502core", config) < (int)sizeof(path));
+    CHECK(rmdir(path) == 0 && rmdir(config) == 0 && rmdir(tmp) == 0);
+}
+
 static void test_experimental_5200(void) {
     char tmp[] = "/tmp/6502core-5200-XXXXXX";
     CHECK(mkdtemp(tmp) != NULL);
@@ -182,33 +270,61 @@ static void test_experimental_5200(void) {
     f = fopen(rompath, "wb");
     CHECK(f && fwrite(data, 1, 0x2000, f) == 0x2000 && fclose(f) == 0);
     Emulator emu = {0};
-    CHECK(!emu_load_rom(&emu, rompath) && !emu.loaded);
+    CHECK(!emu_load_rom(&emu, rompath, ROM_SYSTEM_5200) && !emu.loaded);
     CHECK(strstr(emu.load_error, "BIOS") != NULL);
     char error[256];
     CHECK(bios_config_save(bios, error, sizeof(error)));
-    CHECK(emu_load_rom(&emu, rompath));
+    CHECK(emu_load_rom(&emu, rompath, ROM_SYSTEM_5200));
     CHECK(emu.loaded && emu.is_5200 && emu.system5200.cart_type == SYSTEM5200_CART_8K);
     CHECK(emu.cpu.PC == 0xf800);
     CHECK(emu_step_5200_frame(&emu) && !emu.warned_5200);
     CHECK(emu.gtia5200.framebuffer[0][0] == 0x4e);
-    CHECK(!emu_load_rom(&emu, "/missing.a52") && emu.loaded && emu.is_5200);
+    CHECK(!emu_load_rom(&emu, "/missing.a52", ROM_SYSTEM_5200) && emu.loaded && emu.is_5200);
     CHECK(snprintf(path, sizeof(path), "%s/game.a26", tmp) < (int)sizeof(path));
     data[0xffc] = 0; data[0xffd] = 0xf1;
     f = fopen(path, "wb");
     CHECK(f && fwrite(data, 1, 0x1000, f) == 0x1000 && fclose(f) == 0);
-    CHECK(emu_load_rom(&emu, path) && emu.loaded && !emu.is_5200);
-    CHECK(emu_load_rom(&emu, rompath) && emu.loaded && emu.is_5200);
+    CHECK(emu_load_rom(&emu, path, ROM_SYSTEM_2600) && emu.loaded && !emu.is_5200);
+    CHECK(emu_load_rom(&emu, rompath, ROM_SYSTEM_5200) && emu.loaded && emu.is_5200);
     CHECK(unlink(path) == 0);
     for (unsigned i = 0; i < 3; i++) {
         static const size_t sizes[] = {0x1000, 0x4000, 0x8000};
         static const System5200CartType types[] = {SYSTEM5200_CART_4K, SYSTEM5200_CART_16K, SYSTEM5200_CART_32K};
         f = fopen(rompath, "wb");
         CHECK(f && fwrite(data, 1, sizes[i], f) == sizes[i] && fclose(f) == 0);
-        CHECK(emu_load_rom(&emu, rompath) && emu.system5200.cart_type == types[i]);
+        CHECK(emu_load_rom(&emu, rompath, ROM_SYSTEM_5200) && emu.system5200.cart_type == types[i]);
+    }
+    static const struct {
+        uint16_t entry;
+        System5200CartType type;
+    } layouts[] = {
+        {0x3fff, SYSTEM5200_CART_16K}, {0x4000, SYSTEM5200_CART_16K_EE},
+        {0x65db, SYSTEM5200_CART_16K_EE}, {0x7fff, SYSTEM5200_CART_16K_EE},
+        {0x8000, SYSTEM5200_CART_16K}, {0x9b55, SYSTEM5200_CART_16K},
+    };
+    for (size_t i = 0; i < sizeof(layouts) / sizeof(layouts[0]); i++) {
+        memset(data, 0, sizeof(data));
+        data[0x3ffe] = (uint8_t)layouts[i].entry;
+        data[0x3fff] = (uint8_t)(layouts[i].entry >> 8);
+        if (layouts[i].entry == 0x65db || layouts[i].entry == 0x9b55) {
+            size_t offset = layouts[i].entry - (layouts[i].type == SYSTEM5200_CART_16K_EE ? 0x6000 : 0x8000);
+            data[offset] = 0xa9; /* LDA #$5A */
+            data[offset + 1] = 0x5a;
+        }
+        f = fopen(rompath, "wb");
+        CHECK(f && fwrite(data, 1, 0x4000, f) == 0x4000 && fclose(f) == 0);
+        CHECK(emu_load_rom(&emu, rompath, ROM_SYSTEM_5200) && emu.system5200.cart_type == layouts[i].type);
+        emu.system5200.ram[0x200] = 0x6c; /* JMP ($BFFE), as in the 5200 BIOS */
+        emu.system5200.ram[0x201] = 0xfe;
+        emu.system5200.ram[0x202] = 0xbf;
+        emu.cpu.PC = 0x200;
+        CHECK(cpu_step(&emu.cpu) == 5 && emu.cpu.PC == layouts[i].entry);
+        if (layouts[i].entry == 0x65db || layouts[i].entry == 0x9b55)
+            CHECK(cpu_step(&emu.cpu) == 2 && emu.cpu.A == 0x5a);
     }
     f = fopen(rompath, "wb");
     CHECK(f && fwrite(data, 1, 512, f) == 512 && fclose(f) == 0);
-    CHECK(!emu_load_rom(&emu, rompath) && emu.loaded && emu.is_5200);
+    CHECK(!emu_load_rom(&emu, rompath, ROM_SYSTEM_5200) && emu.loaded && emu.is_5200);
     emu.antic5200.unsupported = true;
     CHECK(emu_step_5200_frame(&emu) && emu.warned_5200);
     emu_destroy(&emu);
@@ -223,6 +339,7 @@ int main(void) {
     test_5200_keyboard_mapping();
     test_frame_pacer();
     test_browser_keys();
+    test_rom_system_detection();
     test_experimental_5200();
     CHECK(video_standard_from_filename("/tmp/PAL_folder/game.bin") == VIDEO_NTSC);
     CHECK(video_standard_from_filename("/tmp/game (PAL).bin") == VIDEO_PAL);
@@ -240,10 +357,8 @@ int main(void) {
     CHECK(fclose(rom_file) == 0);
 
     Emulator emu = {0};
-    CHECK(emu_load_rom(&emu, path));
-    CHECK(is_5200_rom("game.a52") && is_5200_rom("game.A52"));
-    CHECK(!is_5200_rom("game.a26") && !is_5200_rom("game.a52.bin"));
-    CHECK(!emu_load_rom(&emu, "game.a52") && emu.loaded);
+    CHECK(emu_load_rom(&emu, path, ROM_SYSTEM_2600));
+    CHECK(!emu_load_rom(&emu, "game.a52", ROM_SYSTEM_5200) && emu.loaded);
     check_fresh_tia(&emu.tia);
     CHECK(emu.standard == VIDEO_NTSC);
     CHECK(emu.audio.step == TIA_AUDIO_RATE / TIA_OUT_RATE);
@@ -268,10 +383,10 @@ int main(void) {
     CHECK(pal_file != NULL);
     CHECK(fwrite(rom, 1, sizeof(rom), pal_file) == sizeof(rom));
     CHECK(fclose(pal_file) == 0);
-    CHECK(emu_load_rom(&emu, pal_path));
+    CHECK(emu_load_rom(&emu, pal_path, ROM_SYSTEM_2600));
     CHECK(emu.standard == VIDEO_PAL);
     CHECK(emu.audio.step < TIA_AUDIO_RATE / TIA_OUT_RATE);
-    CHECK(emu_load_rom(&emu, path));
+    CHECK(emu_load_rom(&emu, path, ROM_SYSTEM_2600));
     CHECK(emu.standard == VIDEO_NTSC);
     CHECK(unlink(pal_path) == 0);
     tia_write(&emu.tia, 0x00, 0x02);
@@ -288,7 +403,7 @@ int main(void) {
     emu.tia.audio_clock = 42;
     tia_step(&emu.tia, 228);
     CHECK(emu.tia.framebuffer != NULL);
-    CHECK(emu_load_rom(&emu, path));
+    CHECK(emu_load_rom(&emu, path, ROM_SYSTEM_2600));
     check_fresh_tia(&emu.tia);
     emu_destroy(&emu);
 
@@ -306,7 +421,7 @@ int main(void) {
     CHECK(fwrite(dpc_rom, 1, sizeof(dpc_rom), rom_file) == sizeof(dpc_rom));
     CHECK(fclose(rom_file) == 0);
     for (int i = 0; i < 2; i++) {
-        CHECK(emu_load_rom(&emu, path));
+        CHECK(emu_load_rom(&emu, path, ROM_SYSTEM_2600));
         CHECK(emu.cart.type == CART_TYPE_DPC);
         CHECK(system2600_step_frame(&emu.system2600, &emu.cpu));
         CHECK(emu.tia.completed_frame_height > 0);

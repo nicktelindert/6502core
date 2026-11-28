@@ -60,10 +60,8 @@ static void cpu_update_zn(CPU6502 *cpu, uint8_t value) {
 /* --- Instructions --- */
 
 static void instr_unimplemented(CPU6502 *cpu, uint16_t addr) {
+    (void)cpu;
     (void)addr;
-    uint16_t op_pc = (uint16_t)(cpu->PC - 1u);
-    uint8_t op = cpu_read_mem(cpu, op_pc);
-    fprintf(stderr, "Onbekende opcode: 0x%02X op 0x%04X\n", op, op_pc);
 }
 
 static void instr_NOP(CPU6502 *cpu, uint16_t addr) { (void)cpu; (void)addr; }
@@ -690,6 +688,8 @@ int cpu_step(CPU6502 *cpu) {
     uint16_t op_pc = cpu->PC;
     uint8_t opcode = cpu_fetch_u8(cpu);
     OpcodeEntry entry = cpu->opcodes[opcode];
+    if (entry.exec == instr_unimplemented)
+        fprintf(stderr, "Onbekende opcode: 0x%02X op 0x%04X\n", opcode, op_pc);
     cpu->accumulator_mode = entry.mode == mode_ACC;
 
     uint16_t target_addr = entry.mode(cpu, entry.page_penalty);
