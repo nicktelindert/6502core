@@ -72,11 +72,11 @@ static void test_playfield_pixel_patterns(void) {
             tia_write(&tia, 0x0D, values[0]);
             tia_write(&tia, 0x0E, values[1]);
             tia_write(&tia, 0x0F, values[2]);
-            tia_step(&tia, 148);
+            tia_step(&tia, 146);
             tia_write(&tia, 0x0D, values[3]);
             tia_write(&tia, 0x0E, values[4]);
             tia_write(&tia, 0x0F, values[5]);
-            tia_step(&tia, 80);
+            tia_step(&tia, 82);
             for (int x = 0; x < 160; x++) {
                 int offset = x < 80 ? 0 : 3;
                 bool on = expected_playfield_bit(values[offset], values[offset + 1],

@@ -44,6 +44,8 @@ typedef struct TIA {
     uint8_t pf0;        /* $0D */
     uint8_t pf1;        /* $0E */
     uint8_t pf2;        /* $0F */
+    uint8_t pf_pending[3][3], pf_pending_mask[3], pf_delay_index;
+    bool pf_pixel;
 
     /* Players */
     uint8_t grp0;       /* $1B */

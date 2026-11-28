@@ -105,6 +105,212 @@ static void test_playfield_second_half_write(void) {
     cleanup(&fixture);
 }
 
+static void test_color_write_sweep(void) {
+    const uint8_t program[] = {0xa9, 0x46, 0x85, 0x09};
+    for (int standard = VIDEO_NTSC; standard <= VIDEO_PAL; standard++) {
+        Fixture fixture;
+        setup(&fixture, program, sizeof(program));
+        for (int clock = 21; clock <= 228; clock++) {
+            tia_destroy(&fixture.tia);
+            tia_init(&fixture.tia, NULL);
+            tia_set_video_standard(&fixture.tia, (VideoStandard)standard);
+            fixture.cpu.PC = 0xf100;
+            event_count = 0;
+            tia_write(&fixture.tia, 9, 0x26);
+            tia_step(&fixture.tia, clock - 15);
+            CHECK(cpu_step(&fixture.cpu) == 2);
+            CHECK(cpu_step(&fixture.cpu) == 3);
+            CHECK(event_count == 1 && events[0].address == 9);
+            CHECK(events[0].line == clock / 228 && events[0].clock == clock % 228);
+            if (fixture.tia.scanline == 0) tia_step(&fixture.tia, 228 - fixture.tia.clock);
+            tia_step(&fixture.tia, 228);
+            for (int x = 0; x < TIA_FB_WIDTH; x++) {
+                check_pixel(&fixture.tia, 0, x, x + 68 < clock ? 0x26 : 0x46);
+                check_pixel(&fixture.tia, 1, x, 0x46);
+            }
+        }
+        cleanup(&fixture);
+    }
+}
+
+static void test_playfield_registers_second_half(void) {
+    static const struct {
+        uint8_t reg, value;
+        int clock, first, last;
+    } cases[2][3] = {
+        {{0x0d, 0xf0, 144, 80, 96}, {0x0e, 0xff, 156, 96, 128},
+         {0x0f, 0xff, 186, 128, 160}},
+        {{0x0f, 0xff, 144, 80, 112}, {0x0e, 0xff, 174, 112, 144},
+         {0x0d, 0xf0, 207, 144, 160}}
+    };
+    for (unsigned reflected = 0; reflected < 2; reflected++)
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t program[] = {0xa9, cases[reflected][i].value, 0x85, cases[reflected][i].reg};
+        Fixture fixture;
+        setup(&fixture, program, sizeof(program));
+        tia_write(&fixture.tia, 0x08, 0x0e);
+        tia_write(&fixture.tia, 0x0a, (uint8_t)reflected);
+        tia_step(&fixture.tia, cases[reflected][i].clock - 21);
+        CHECK(cpu_step(&fixture.cpu) == 2 && cpu_step(&fixture.cpu) == 3);
+        CHECK(event_count == 1 && events[0].address == cases[reflected][i].reg);
+        CHECK(events[0].clock == cases[reflected][i].clock && events[0].line == 0);
+        tia_step(&fixture.tia, 228 - fixture.tia.clock);
+        for (int x = 0; x < TIA_FB_WIDTH; x++) {
+            bool foreground = x >= cases[reflected][i].first && x < cases[reflected][i].last;
+            check_pixel(&fixture.tia, 0, x, foreground ? 0x0e : 0);
+        }
+        cleanup(&fixture);
+    }
+}
+
+static bool playfield_register_pixel(unsigned reg, bool reflected, int x) {
+    int bit = x / 4;
+    if (bit >= 20) bit = reflected ? 39 - bit : bit - 20;
+    return reg == 0 ? bit < 4 : reg == 1 ? bit >= 4 && bit < 12 : bit >= 12;
+}
+
+static void test_playfield_write_boundaries(void) {
+    /* Stella TIA: PF writes are delayed two clocks; the playfield samples every four pixels. */
+    for (unsigned reflected = 0; reflected < 2; reflected++)
+    for (unsigned reg = 0; reg < 3; reg++) {
+        uint8_t program[] = {0xa9, reg == 0 ? 0xf0 : 0xff, 0x85, (uint8_t)(0x0d + reg)};
+        Fixture fixture;
+        setup(&fixture, program, sizeof(program));
+        for (int group = 0; group < 160; group += 4) {
+            if (!playfield_register_pixel(reg, reflected != 0, group)) continue;
+            for (int offset = -4; offset <= 4; offset++) {
+                int write_clock = 68 + group + offset;
+                tia_destroy(&fixture.tia);
+                tia_init(&fixture.tia, NULL);
+                fixture.cpu.PC = 0xf100;
+                event_count = 0;
+                tia_write(&fixture.tia, 0x08, 0x0e);
+                tia_write(&fixture.tia, 0x0a, (uint8_t)reflected);
+                tia_step(&fixture.tia, write_clock - 15);
+                CHECK(cpu_step(&fixture.cpu) == 2 && cpu_step(&fixture.cpu) == 3);
+                CHECK(event_count == 1 && events[0].address == 0x0d + reg);
+                CHECK(events[0].line == write_clock / 228 && events[0].clock == write_clock % 228);
+                if (fixture.tia.scanline == 0) tia_step(&fixture.tia, 228 - fixture.tia.clock);
+                tia_step(&fixture.tia, 228);
+                for (int x = 0; x < TIA_FB_WIDTH; x++) {
+                    bool bit = playfield_register_pixel(reg, reflected != 0, x);
+                    bool active = bit && 68 + (x & ~3) >= write_clock + 2;
+                    check_pixel(&fixture.tia, 0, x, active ? 0x0e : 0);
+                    check_pixel(&fixture.tia, 1, x, bit ? 0x0e : 0);
+                }
+            }
+        }
+        cleanup(&fixture);
+    }
+}
+
+static void test_playfield_pending_writes(void) {
+    TIA tia = {0};
+    tia_init(&tia, NULL);
+    tia_write(&tia, 0x0d, 0x10);
+    tia_step(&tia, 1);
+    tia_write(&tia, 0x0d, 0x20);
+    tia_write(&tia, 0x0e, 0x80);
+    tia_step(&tia, 1);
+    CHECK(tia.pf0 == 0 && tia.pf1 == 0);
+    tia_step(&tia, 1);
+    CHECK(tia.pf0 == 0x10 && tia.pf1 == 0);
+    tia_step(&tia, 1);
+    CHECK(tia.pf0 == 0x20 && tia.pf1 == 0x80);
+    tia_write(&tia, 0x0f, 0xff);
+    tia_write(&tia, 0x0f, 0x55);
+    tia_step(&tia, 3);
+    CHECK(tia.pf2 == 0x55);
+    tia_destroy(&tia);
+    tia_init(&tia, NULL);
+    CHECK(tia.pf0 == 0 && tia.pf1 == 0 && tia.pf2 == 0);
+    tia_step(&tia, 3);
+    CHECK(tia.pf0 == 0 && tia.pf1 == 0 && tia.pf2 == 0);
+    tia_destroy(&tia);
+}
+
+static void test_playfield_clear_and_collision(void) {
+    const uint8_t program[] = {0xa9, 0x00, 0x85, 0x0d};
+    Fixture fixture;
+    setup(&fixture, program, sizeof(program));
+    tia_write(&fixture.tia, 0x08, 0x0e);
+    tia_write(&fixture.tia, 0x0d, 0xf0);
+    tia_write(&fixture.tia, 0x06, 0x08);
+    tia_write(&fixture.tia, 0x1b, 0xff);
+    fixture.tia.p0_x = 8;
+    tia_step(&fixture.tia, 59);
+    CHECK(cpu_step(&fixture.cpu) == 2 && cpu_step(&fixture.cpu) == 3);
+    CHECK(event_count == 1 && events[0].clock == 80);
+    tia_step(&fixture.tia, 228 - fixture.tia.clock);
+    for (int x = 0; x < TIA_FB_WIDTH; x++) {
+        uint8_t color = x >= 8 && x < 16 ? 0x08 : x < 16 ? 0x0e : 0;
+        check_pixel(&fixture.tia, 0, x, color);
+    }
+    CHECK(fixture.tia.cxp0fb & 0x80);
+    tia_write(&fixture.tia, 0x2c, 0);
+    tia_step(&fixture.tia, 228);
+    CHECK(!(fixture.tia.cxp0fb & 0x80));
+    cleanup(&fixture);
+}
+
+static void test_object_color_write(void) {
+    for (unsigned player = 0; player < 2; player++) {
+        uint8_t program[] = {0xa9, 0x46, 0x85, player ? 0x06 : 0x08};
+        Fixture fixture;
+        setup(&fixture, program, sizeof(program));
+        if (player) {
+            tia_write(&fixture.tia, 0x06, 0x26);
+            tia_write(&fixture.tia, 0x04, 7);
+            tia_write(&fixture.tia, 0x10, 0);
+            tia_write(&fixture.tia, 0x1b, 0xff);
+            CHECK(fixture.tia.p0_x == 4);
+        } else {
+            tia_write(&fixture.tia, 0x08, 0x26);
+            tia_write(&fixture.tia, 0x0d, 0xf0);
+            tia_write(&fixture.tia, 0x0e, 0xff);
+            tia_write(&fixture.tia, 0x0f, 0xff);
+        }
+        tia_step(&fixture.tia, 84 - 21);
+        CHECK(cpu_step(&fixture.cpu) == 2 && cpu_step(&fixture.cpu) == 3);
+        CHECK(event_count == 1 && events[0].clock == 84);
+        CHECK(events[0].address == (player ? 6 : 8));
+        tia_step(&fixture.tia, 228 - fixture.tia.clock);
+        for (int x = 0; x < TIA_FB_WIDTH; x++) {
+            bool foreground = !player || (x >= 4 && x < 36);
+            check_pixel(&fixture.tia, 0, x, foreground ? (x < 16 ? 0x26 : 0x46) : 0);
+        }
+        cleanup(&fixture);
+    }
+}
+
+static void test_multiple_color_writes(void) {
+    const uint8_t program[] = {
+        0xa9, 0x46, 0x85, 0x09,
+        0xa9, 0x86, 0x85, 0x09,
+        0xa9, 0xc6, 0x85, 0x09
+    };
+    for (int standard = VIDEO_NTSC; standard <= VIDEO_PAL; standard++) {
+        Fixture fixture;
+        setup(&fixture, program, sizeof(program));
+        tia_set_video_standard(&fixture.tia, (VideoStandard)standard);
+        tia_write(&fixture.tia, 9, 0x26);
+        tia_step(&fixture.tia, 63);
+        for (int i = 0; i < 3; i++) {
+            CHECK(cpu_step(&fixture.cpu) == 2);
+            CHECK(cpu_step(&fixture.cpu) == 3);
+            CHECK(event_count == (unsigned)i + 1);
+            CHECK(events[i].address == 9 && events[i].line == 0 &&
+                  events[i].clock == 84 + 15 * i);
+        }
+        tia_step(&fixture.tia, 228 - fixture.tia.clock);
+        for (int x = 0; x < TIA_FB_WIDTH; x++) {
+            uint8_t color = x < 16 ? 0x26 : x < 31 ? 0x46 : x < 46 ? 0x86 : 0xc6;
+            check_pixel(&fixture.tia, 0, x, color);
+        }
+        cleanup(&fixture);
+    }
+}
+
 static void test_branch_write_timing(void) {
     const uint8_t program[] = {
         0xd0, 0x02, 0xea, 0xea, /* BNE skips two NOPs */
@@ -199,7 +405,14 @@ static void test_wsync_positions(void) {
 
 int main(void) {
     test_color_write_positions();
+    test_color_write_sweep();
     test_playfield_second_half_write();
+    test_playfield_registers_second_half();
+    test_playfield_write_boundaries();
+    test_playfield_pending_writes();
+    test_playfield_clear_and_collision();
+    test_object_color_write();
+    test_multiple_color_writes();
     test_branch_write_timing();
     test_rmw_bus_writes();
     test_wsync_positions();

@@ -204,14 +204,15 @@ void tia_write(TIA *tia, uint16_t addr, uint8_t val) {
             tia->refp1 = v;
             break;
         case 0x0Du: /* PF0 */
-            tia->pf0 = v;
-            break;
         case 0x0Eu: /* PF1 */
-            tia->pf1 = v;
+        case 0x0Fu: { /* PF2 */
+            /* Playfield writes take effect two color clocks later. */
+            unsigned slot = (tia->pf_delay_index + 2u) % 3u;
+            unsigned index = reg - 0x0du;
+            tia->pf_pending[slot][index] = v;
+            tia->pf_pending_mask[slot] |= (uint8_t)(1u << index);
             break;
-        case 0x0Fu: /* PF2 */
-            tia->pf2 = v;
-            break;
+        }
         case 0x10u: { /* RESP0 */
             NusizLayout lay = get_nusiz_layout(tia->nusiz0);
             int wide_delay = (lay.scale > 1) ? 1 : 0;
@@ -398,6 +399,15 @@ static void tia_render_pixel(TIA *tia, int clk) {
     
     int idx = (y * TIA_FB_WIDTH + x) * 3;
 
+    /* A playfield bit is sampled once for each four-pixel group. */
+    if ((x & 3) == 0) {
+        int bit = x / 4;
+        if (bit >= 20) bit = (tia->ctrlpf & 1) ? 39 - bit : bit - 20;
+        if (bit < 4) tia->pf_pixel = ((tia->pf0 >> (4 + bit)) & 1u) != 0;
+        else if (bit < 12) tia->pf_pixel = ((tia->pf1 >> (11 - bit)) & 1u) != 0;
+        else tia->pf_pixel = ((tia->pf2 >> (bit - 12)) & 1u) != 0;
+    }
+
     if (tia->vblank & 0x02u) {
         fb[idx]     = 0;
         fb[idx + 1] = 0;
@@ -413,10 +423,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
     bool m1_en = ((tia->enam1 & 0x02u) != 0) && !tia->resmp1;
     bool bl_en = (active_enabl & 0x02u) != 0;
 
-    uint8_t pf0 = tia->pf0;
-    uint8_t pf1 = tia->pf1;
-    uint8_t pf2 = tia->pf2;
-    bool has_pf = (pf0 | pf1 | pf2) != 0;
+    bool has_pf = tia->pf_pixel;
 
     uint8_t colup0 = tia->colup0;
     uint8_t colup1 = tia->colup1;
@@ -446,7 +453,6 @@ static void tia_render_pixel(TIA *tia, int clk) {
     int m1_w = 1 << ((tia->nusiz1 >> 4) & 0x03);
     int bl_w = 1 << ((tia->ctrlpf >> 4) & 0x03);
 
-    bool pf_ref = (tia->ctrlpf & 0x01u) != 0;
     bool pf_score = ((tia->ctrlpf & 0x02u) != 0) && ((tia->ctrlpf & 0x04u) == 0);
     bool pf_prio = (tia->ctrlpf & 0x04u) != 0;
 
@@ -456,14 +462,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
     int m1_x = tia->m1_x;
     int bl_x = tia->bl_x;
 
-    bool pf_on = false;
-    if (has_pf) {
-        int bit = x >> 2;
-        if (bit >= 20) bit = pf_ref ? 39 - bit : bit - 20;
-        if (bit < 4) pf_on = ((pf0 >> (4 + bit)) & 1u) != 0;
-        else if (bit < 12) pf_on = ((pf1 >> (11 - bit)) & 1u) != 0;
-        else pf_on = ((pf2 >> (bit - 12)) & 1u) != 0;
-    }
+    bool pf_on = tia->pf_pixel;
 
     bool p0_on = false;
     if (active_grp0) {
@@ -557,6 +556,13 @@ static void tia_render_pixel(TIA *tia, int clk) {
 
 void tia_tick_clock(TIA *tia) {
     int clk = tia->clock;
+
+    uint8_t pending = tia->pf_pending_mask[tia->pf_delay_index];
+    if (pending & 1) tia->pf0 = tia->pf_pending[tia->pf_delay_index][0];
+    if (pending & 2) tia->pf1 = tia->pf_pending[tia->pf_delay_index][1];
+    if (pending & 4) tia->pf2 = tia->pf_pending[tia->pf_delay_index][2];
+    tia->pf_pending_mask[tia->pf_delay_index] = 0;
+    tia->pf_delay_index = (uint8_t)((tia->pf_delay_index + 1u) % 3u);
 
     /* 1. Audio-klok (114 color clocks per halve scanline) */
     tia->audio_clock += 1;

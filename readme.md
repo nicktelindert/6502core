@@ -60,7 +60,7 @@ make 2600-demo 5200-demo
 
 Press Escape to close a demo. Add `--once` to run a single-frame check.
 
-The tests help catch regressions but do not guarantee that every game works correctly. For an optional additional CPU test, see [Klaus Dormann's functional tests](https://github.com/Klaus2m5/6502_65C02_functional_tests) and run `make test-functional FUNCTIONAL_ROM=/path/to/6502_functional_test.bin`.
+The tests cover 2600 scanlines and changes during a line, but do not guarantee that every game or timing effect works correctly. For an optional additional CPU test, see [Klaus Dormann's functional tests](https://github.com/Klaus2m5/6502_65C02_functional_tests) and run `make test-functional FUNCTIONAL_ROM=/path/to/6502_functional_test.bin`.
 
 ## Roadmap
 
