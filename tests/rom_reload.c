@@ -1,6 +1,7 @@
 #define main emulator_main
 #include "../main.c"
 #undef main
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define CHECK(condition) do { \
@@ -37,8 +38,54 @@ static void test_frame_pacer(void) {
     }
 }
 
+static void test_browser_keys(void) {
+    char tmp[] = "/tmp/6502core-ui-XXXXXX";
+    CHECK(mkdtemp(tmp) != NULL);
+    char config[ROM_PATH_MAX], folder[ROM_PATH_MAX], rom[ROM_PATH_MAX], path[ROM_PATH_MAX];
+    CHECK(snprintf(config, sizeof(config), "%s/config", tmp) < (int)sizeof(config));
+    CHECK(snprintf(folder, sizeof(folder), "%s/games", tmp) < (int)sizeof(folder));
+    CHECK(snprintf(rom, sizeof(rom), "%s/game.bin", folder) < (int)sizeof(rom));
+    CHECK(mkdir(folder, 0700) == 0);
+    FILE *f = fopen(rom, "w");
+    CHECK(f && fclose(f) == 0);
+    CHECK(setenv("XDG_CONFIG_HOME", config, 1) == 0);
+
+    OverlayState ov = {0};
+    CHECK(overlay_open_browser(&ov, tmp, true));
+    CHECK(ov.show_rom_menu && ov.selecting_folder);
+    CHECK(ov.browser.count == 2);
+    CHECK(!overlay_browser_key(&ov, SDLK_DOWN, path, sizeof(path)));
+    CHECK(!overlay_browser_key(&ov, SDLK_RETURN, path, sizeof(path)));
+    CHECK(strcmp(ov.browser.dir, folder) == 0);
+    CHECK(!overlay_browser_key(&ov, SDLK_s, path, sizeof(path)));
+    CHECK(!ov.selecting_folder && strcmp(ov.rom_dir, folder) == 0);
+    char error[256];
+    CHECK(rom_config_load(path, sizeof(path), error, sizeof(error)) == ROM_CONFIG_OK);
+    CHECK(strcmp(path, folder) == 0);
+    CHECK(!overlay_browser_key(&ov, SDLK_DOWN, path, sizeof(path)));
+    CHECK(overlay_browser_key(&ov, SDLK_RETURN, path, sizeof(path)));
+    CHECK(strcmp(path, rom) == 0);
+    CHECK(!overlay_browser_key(&ov, SDLK_BACKSPACE, path, sizeof(path)));
+    CHECK(strcmp(ov.browser.dir, tmp) == 0);
+    CHECK(overlay_open_browser(&ov, tmp, true));
+    CHECK(setenv("XDG_CONFIG_HOME", rom, 1) == 0);
+    CHECK(!overlay_browser_key(&ov, SDLK_s, path, sizeof(path)));
+    CHECK(ov.selecting_folder && strcmp(ov.rom_dir, folder) == 0 && ov.browser_error[0]);
+    CHECK(setenv("XDG_CONFIG_HOME", config, 1) == 0);
+    CHECK(overlay_open_browser(&ov, folder, true));
+    CHECK(!overlay_browser_key(&ov, SDLK_ESCAPE, path, sizeof(path)));
+    CHECK(!ov.show_rom_menu && strcmp(ov.rom_dir, folder) == 0);
+    rom_browser_free(&ov.browser);
+    CHECK(unlink(rom) == 0 && rmdir(folder) == 0);
+    CHECK(snprintf(path, sizeof(path), "%s/6502core/config.ini", config) < (int)sizeof(path));
+    CHECK(unlink(path) == 0);
+    CHECK(snprintf(path, sizeof(path), "%s/6502core", config) < (int)sizeof(path));
+    CHECK(rmdir(path) == 0 && rmdir(config) == 0 && rmdir(tmp) == 0);
+}
+
 int main(void) {
     test_frame_pacer();
+    test_browser_keys();
     CHECK(video_standard_from_filename("/tmp/PAL_folder/game.bin") == VIDEO_NTSC);
     CHECK(video_standard_from_filename("/tmp/game (PAL).bin") == VIDEO_PAL);
     CHECK(video_standard_from_filename("/tmp/game-pal.a26") == VIDEO_PAL);

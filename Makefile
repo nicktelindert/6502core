@@ -6,7 +6,7 @@ LDFLAGS = -lSDL2
 
 CORE_SRCS = cpu6502.c addressing.c bus.c tia.c riot.c cartridge.c audio.c
 CORE_HEADERS = cpu6502.h addressing.h bus.h tia.h riot.h cartridge.h detectchip.h audio.h video.h
-APP_SRCS = main.c $(CORE_SRCS)
+APP_SRCS = main.c rom_browser.c $(CORE_SRCS)
 TEST_BIN = tests/cpu_test
 CART_TEST_BIN = tests/cartridge_test
 TIA_TEST_BIN = tests/tia_test
@@ -15,14 +15,15 @@ RELOAD_TEST_BIN = tests/rom_reload_test
 CPU_BUS_TEST_BIN = tests/cpu_bus_test
 CPU_FUNCTIONAL_TEST_BIN = tests/cpu_functional_test
 SYSTEM_TEST_BIN = tests/system2600_test
+BROWSER_TEST_BIN = tests/rom_browser_test
 
 .PHONY: all test test-functional clean
 
 all: 6502core
 
-6502core_rel: $(APP_SRCS) $(CORE_HEADERS)
+6502core_rel: $(APP_SRCS) $(CORE_HEADERS) rom_browser.h
 	$(CC) $(CFLAGS_release) -o $@ $(APP_SRCS) $(LDFLAGS)
-6502core: $(APP_SRCS) $(CORE_HEADERS)
+6502core: $(APP_SRCS) $(CORE_HEADERS) rom_browser.h
 	$(CC) $(CFLAGS) -o $@ $(APP_SRCS) $(LDFLAGS)
 
 $(TEST_BIN): tests/cpu.c $(CORE_SRCS) $(CORE_HEADERS)
@@ -37,8 +38,11 @@ $(TIA_TEST_BIN): tests/tia.c $(CORE_SRCS) $(CORE_HEADERS)
 $(RIOT_TEST_BIN): tests/riot.c $(CORE_SRCS) $(CORE_HEADERS)
 	$(CC) $(CFLAGS) -o $@ tests/riot.c $(CORE_SRCS) $(LDFLAGS)
 
-$(RELOAD_TEST_BIN): tests/rom_reload.c main.c $(CORE_SRCS) $(CORE_HEADERS)
-	$(CC) $(CFLAGS) -o $@ tests/rom_reload.c $(CORE_SRCS) $(LDFLAGS)
+$(RELOAD_TEST_BIN): tests/rom_reload.c main.c rom_browser.c rom_browser.h $(CORE_SRCS) $(CORE_HEADERS)
+	$(CC) $(CFLAGS) -o $@ tests/rom_reload.c rom_browser.c $(CORE_SRCS) $(LDFLAGS)
+
+$(BROWSER_TEST_BIN): tests/rom_browser.c rom_browser.c rom_browser.h
+	$(CC) $(CFLAGS) -o $@ tests/rom_browser.c rom_browser.c
 
 $(CPU_BUS_TEST_BIN): tests/cpu_bus.c cpu6502.c addressing.c cpu6502.h addressing.h
 	$(CC) $(CFLAGS) -o $@ tests/cpu_bus.c cpu6502.c addressing.c
@@ -52,7 +56,7 @@ $(SYSTEM_TEST_BIN): tests/system2600.c $(CORE_SRCS) $(CORE_HEADERS)
 test-functional: $(CPU_FUNCTIONAL_TEST_BIN)
 	./$(CPU_FUNCTIONAL_TEST_BIN) "$(FUNCTIONAL_ROM)"
 
-test: $(TEST_BIN) $(CART_TEST_BIN) $(TIA_TEST_BIN) $(RIOT_TEST_BIN) $(RELOAD_TEST_BIN) $(CPU_BUS_TEST_BIN) $(SYSTEM_TEST_BIN)
+test: $(TEST_BIN) $(CART_TEST_BIN) $(TIA_TEST_BIN) $(RIOT_TEST_BIN) $(RELOAD_TEST_BIN) $(CPU_BUS_TEST_BIN) $(SYSTEM_TEST_BIN) $(BROWSER_TEST_BIN)
 	./$(TEST_BIN)
 	./$(CART_TEST_BIN)
 	./$(TIA_TEST_BIN)
@@ -60,6 +64,7 @@ test: $(TEST_BIN) $(CART_TEST_BIN) $(TIA_TEST_BIN) $(RIOT_TEST_BIN) $(RELOAD_TES
 	./$(RELOAD_TEST_BIN)
 	./$(CPU_BUS_TEST_BIN)
 	./$(SYSTEM_TEST_BIN)
+	./$(BROWSER_TEST_BIN)
 
 clean:
-	rm -f 6502core $(TEST_BIN) $(CART_TEST_BIN) $(TIA_TEST_BIN) $(RIOT_TEST_BIN) $(RELOAD_TEST_BIN) $(CPU_BUS_TEST_BIN) $(CPU_FUNCTIONAL_TEST_BIN) $(SYSTEM_TEST_BIN)
+	rm -f 6502core $(TEST_BIN) $(CART_TEST_BIN) $(TIA_TEST_BIN) $(RIOT_TEST_BIN) $(RELOAD_TEST_BIN) $(CPU_BUS_TEST_BIN) $(CPU_FUNCTIONAL_TEST_BIN) $(SYSTEM_TEST_BIN) $(BROWSER_TEST_BIN)
