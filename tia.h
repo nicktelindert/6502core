@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "video.h"
 
 #define TIA_FB_WIDTH  160
 #define TIA_FB_HEIGHT 192
@@ -103,11 +104,12 @@ typedef struct TIA {
     size_t framebuffer_capacity;
     int frame_height;
     int completed_frame_height;
-    uint8_t ntsc_lut[256][3];
+    uint8_t color_lut[256][3];
 } TIA;
 
 /* Destroy an initialized TIA before reinitializing it. */
 void tia_init(TIA *tia, TIAAudio *audio);
+void tia_set_video_standard(TIA *tia, VideoStandard standard);
 uint8_t tia_read(TIA *tia, uint16_t addr);
 void tia_write(TIA *tia, uint16_t addr, uint8_t val);
 void tia_step(TIA *tia, int color_clocks);

@@ -87,6 +87,25 @@ static void compute_ntsc_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
     out_rgb[2] = (uint8_t)(b > 255 ? 255 : (b < 0 ? 0 : b));
 }
 
+static void compute_pal_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
+    static const uint8_t pal_hue_to_ntsc[16] = {
+        0, 0, 1, 13, 3, 12, 4, 11,
+        5, 10, 6, 9, 7, 8, 0, 0
+    };
+    uint8_t hue = pal_hue_to_ntsc[color_byte >> 4];
+    compute_ntsc_rgb((uint8_t)((hue << 4) | (color_byte & 0x0Fu)), out_rgb);
+}
+
+void tia_set_video_standard(TIA *tia, VideoStandard standard) {
+    for (int c = 0; c < 256; c++) {
+        if (standard == VIDEO_PAL) {
+            compute_pal_rgb((uint8_t)c, tia->color_lut[c]);
+        } else {
+            compute_ntsc_rgb((uint8_t)c, tia->color_lut[c]);
+        }
+    }
+}
+
 void tia_init(TIA *tia, TIAAudio *audio) {
     memset(tia, 0, sizeof(*tia));
     tia->framebuffer_capacity = 0;
@@ -106,9 +125,7 @@ void tia_init(TIA *tia, TIAAudio *audio) {
     tia->y = 0;
     tia->visible_top_line = -1;
 
-    for (int c = 0; c < 256; c++) {
-        compute_ntsc_rgb((uint8_t)c, tia->ntsc_lut[c]);
-    }
+    tia_set_video_standard(tia, VIDEO_NTSC);
 }
 
 uint8_t tia_read(TIA *tia, uint16_t addr) {
@@ -407,7 +424,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
     uint8_t colubk = tia->colubk;
 
     if (!active_grp0 && !active_grp1 && !m0_en && !m1_en && !bl_en && !has_pf) {
-        const uint8_t *bg = tia->ntsc_lut[colubk];
+        const uint8_t *bg = tia->color_lut[colubk];
         fb[idx]     = bg[0];
         fb[idx + 1] = bg[1];
         fb[idx + 2] = bg[2];
@@ -543,7 +560,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
         else c = colubk;
     }
 
-    const uint8_t *rgb = tia->ntsc_lut[c];
+    const uint8_t *rgb = tia->color_lut[c];
     fb[idx]     = rgb[0];
     fb[idx + 1] = rgb[1];
     fb[idx + 2] = rgb[2];

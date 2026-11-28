@@ -1,4 +1,5 @@
 #include "../tia.h"
+#include "../audio.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,7 +44,29 @@ static void test_reinitialization(void) {
 }
 
 static int pixel_is_color(const TIA *tia, int x, uint8_t color) {
-    return memcmp(&tia->framebuffer[x * 3], tia->ntsc_lut[color], 3) == 0;
+    return memcmp(&tia->framebuffer[x * 3], tia->color_lut[color], 3) == 0;
+}
+
+static void test_pal_color_and_audio(void) {
+    TIA tia;
+    TIAAudio audio;
+    tia_audio_init(&audio);
+    tia_init(&tia, &audio);
+    tia_set_video_standard(&tia, VIDEO_PAL);
+    tia_audio_set_video_standard(&audio, VIDEO_PAL);
+    for (int i = 0; i < 256; i += 2)
+        CHECK(memcmp(tia.color_lut[i], tia.color_lut[i + 1], 3) == 0);
+    CHECK(tia.color_lut[0x38][1] > tia.color_lut[0x38][0]);
+    CHECK(tia.color_lut[0x68][0] > tia.color_lut[0x68][1]);
+    CHECK(tia.color_lut[0xB8][2] > tia.color_lut[0xB8][0]);
+    CHECK(memcmp(tia.color_lut[0x08], tia.color_lut[0x18], 3) == 0);
+    CHECK(memcmp(tia.color_lut[0x08], tia.color_lut[0xE8], 3) == 0);
+    tia_write(&tia, 0x09, 0x38);
+    tia_step(&tia, 228 * 312);
+    CHECK(tia.scanline == 312);
+    CHECK(pixel_is_color(&tia, 0, 0x38));
+    CHECK(audio.sample_count == 884);
+    tia_destroy(&tia);
 }
 
 /* Manual PDF pp. 5-7 and figure on p. 20: NUSIZ copies and widths. */
@@ -281,6 +304,7 @@ static void test_wsync(void) {
 
 int main(void) {
     test_reinitialization();
+    test_pal_color_and_audio();
     test_player_and_missile_copies();
     test_reflection();
     test_collisions();

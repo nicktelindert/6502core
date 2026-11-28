@@ -14,6 +14,11 @@ The shared core models NMOS decimal ADC/SBC and exposes `cpu_set_irq` and `cpu_s
 ## Rewritten TIA (Color-Clock Accuracy)
 After researching and documenting the hardware behavior, I rewrote the TIA to render at the **color-clock level**. This provides more accurate video and audio timing than the earlier scanline-based approach. Scanline tracking remains useful for frame bookkeeping, but it does not replace color-clock rendering.
 
+## PAL and NTSC
+ROMs whose filename contains `PAL` (case-insensitive) start in PAL mode; all others start in NTSC mode. The directory name is not used. Press **F4** to switch between PAL and NTSC while a ROM is running. Loading another ROM selects its standard again from its filename. The current standard is shown next to the FPS counter.
+
+PAL uses a 50 Hz frame limit and NTSC uses 60 Hz. The TIA audio resampling and DPC oscillator use the corresponding CPU clock. Frame height is determined by the ROM's VSYNC rather than forced to 312 or 262 lines. F3 toggles the frame limit. PAL colors are an approximation using the PAL hue ordering and the existing RGB model, not an analog PAL signal simulation; SECAM is not supported.
+
 ## Tests
 Run `make test` for the CPU, Atari 2600 system, TIA, RIOT and synthetic cartridge regression tests. The cartridge tests cover bank-switch hotspots, 6507 address mirrors, shared Superchip RAM, switching banks with a `BIT` instruction, and indexed and branch dummy reads.
 
@@ -21,7 +26,7 @@ The standalone CPU bus test links only the CPU and addressing code and checks a 
 
 It also tests interrupt entry, priority, masking and stack behavior, representative NMOS decimal flags, and all 40,000 valid BCD ADC/SBC combinations with both carry inputs. For an additional independent test, supply the separately obtained `bin_files/6502_functional_test.bin` from [Klaus Dormann's 6502 functional tests](https://github.com/Klaus2m5/6502_65C02_functional_tests) and run `make test-functional FUNCTIONAL_ROM=/path/to/6502_functional_test.bin`. The runner expects the 64 KB image from commit `7954e2dbb49c469ea286070bf46cdd71aeb29e4b` (SHA-256 `fa12bfc761e6f9057e4cc01a665a7b800ff01ae91f598af1e39a1201d01953fd`); that test covers official instructions but not all interrupt, undocumented-opcode or cycle-level behavior.
 
-The Atari 2600 system tests check all 65,536 CPU addresses against the TIA, RIOT, RAM and cartridge bus decoding and 13-bit mirrors. A synthetic cartridge exercises reset, instructions, RAM, TIA and RIOT together; another checks a WSYNC stall and RIOT timing. Cartridge tests cover 2K/4K ROM mirrors, F8, F6/F6SC, F4/F4SC and EF bank hotspots, E0's switchable slices, F8SC/F6SC/F4SC RAM, and FA's 256-byte RAM. They also cover 3F's 64 KB layout and writes through the TIA address space, including a CPU instruction; 3F ROMs larger than 64 KB are not supported. DPC tests cover bank switching, fetcher registers, an oscillator step and a startup timer-polling loop. RIOT tests cover timer intervals and underflow, I/O and timer write mirrors. TIA tests cover player/missile copies, collisions, priority, reflection, vertical delay and WSYNC. A reload test verifies TIA state is reset between cartridges and DPC startup works after a reload.
+The Atari 2600 system tests check all 65,536 CPU addresses against the TIA, RIOT, RAM and cartridge bus decoding and 13-bit mirrors. A synthetic cartridge exercises reset, instructions, RAM, TIA and RIOT together; another checks a WSYNC stall and RIOT timing. Cartridge tests cover 2K/4K ROM mirrors, F8, F6/F6SC, F4/F4SC and EF bank hotspots, E0's switchable slices, F8SC/F6SC/F4SC RAM, and FA's 256-byte RAM. They also cover 3F's 64 KB layout and writes through the TIA address space, including a CPU instruction; 3F ROMs larger than 64 KB are not supported. DPC tests cover bank switching, fetcher registers, oscillator timing for both video standards and a startup timer-polling loop. RIOT tests cover timer intervals and underflow, I/O and timer write mirrors. TIA tests cover player/missile copies, collisions, priority, reflection, vertical delay, WSYNC and PAL color/audio timing. A reload test verifies TIA state is reset between cartridges, video selection and DPC startup after a reload.
 
 Mapper hotspot expectations were checked against Stella's implementations of [F4](https://github.com/stella-emu/stella/blob/master/src/emucore/CartF4.cxx), [E0](https://github.com/stella-emu/stella/blob/master/src/emucore/CartE0.cxx), [EF](https://github.com/stella-emu/stella/blob/master/src/emucore/CartEF.cxx) and [3F](https://github.com/stella-emu/stella/blob/master/src/emucore/Cart3F.hxx). Superchip write-port reads use the emulator's last modeled bus value as an approximation of the floating bus.
 
@@ -37,7 +42,8 @@ To prevent a program that never produces VSYNC from hanging or growing the frame
 - [x] Rewrite TIA to operate at color-clock level
 - [x] Stabilize low-latency SDL audio queue
 - [x] Fix remaining top-scanline flicker in *Jungle Hunt* (NTSC)
-- [x] Set rendering to 4:3 ratio and add overscan option(only height)
+- [x] Set rendering to 4:3 ratio
+- [x] Add PAL and NTSC selection
 - [x] Borrowed the Cartridge detection from Stella
 - [x] Added GPL V2 license to be compatible with Stella
 - [x] Add DPC support

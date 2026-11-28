@@ -452,6 +452,23 @@ static void test_dpc_power_on_timer_polling(void) {
     cart_free(&cart);
 }
 
+static void test_dpc_video_clock(void) {
+    uint8_t rom[10240] = {0};
+    for (int standard = VIDEO_NTSC; standard <= VIDEO_PAL; standard++) {
+        Cartridge cart;
+        CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "DPC clock test"));
+        CHECK(cart.type == CART_TYPE_DPC);
+        cart_set_video_standard(&cart, (VideoStandard)standard);
+        cart_write(&cart, 0x1045, 10);
+        cart_write(&cart, 0x104D, 0);
+        cart_write(&cart, 0x105D, 0x10);
+        cart_write(&cart, 0x1055, 0);
+        cart_step_cycles(&cart, 596);
+        CHECK(cart_read(&cart, 0x1004, 0) == (standard == VIDEO_NTSC ? 4 : 0));
+        cart_free(&cart);
+    }
+}
+
 static void test_unbanked_rom_mirrors(void) {
     uint8_t rom[4096];
     for (size_t i = 0; i < sizeof(rom); i++) {
@@ -702,6 +719,7 @@ int main(void) {
     test_3f_banks_and_tia();
     test_dpc_registers_and_banks();
     test_dpc_power_on_timer_polling();
+    test_dpc_video_clock();
     test_unbanked_rom_mirrors();
     test_f6sc_all_mirrors();
     test_f6sc_shared_ram();

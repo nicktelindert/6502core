@@ -735,3 +735,10 @@ void cart_step_cycles(Cartridge *cart, int cycles) {
 
     dpc.total_cycles += (uint64_t)cycles;
 }
+
+void cart_set_video_standard(Cartridge *cart, VideoStandard standard) {
+    if (cart && cart->type == CART_TYPE_DPC) {
+        dpc_update_music_fetchers();
+        dpc.clock_rate = video_cpu_clock(standard);
+    }
+}

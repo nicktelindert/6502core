@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 #include "tia.h"
 #include "riot.h"
@@ -26,6 +27,7 @@ typedef struct {
     Bus bus;
     CPU6502 cpu;
     bool loaded;
+    VideoStandard standard;
 } Emulator;
 
 typedef struct {
@@ -38,13 +40,6 @@ typedef struct {
     char debug_lines[8][128];
     int debug_line_count;
 } OverlayState;
-
-typedef struct {
-    int top_crop;       /* aantal bovenste regels om bij weergave over te slaan */
-    int view_height;    /* aantal zichtbare regels in het uitvoerbeeld */
-} DisplayCrop;
-
-
 
 /* Minimale 5x7 bitmap glyphs (bovenste 5 bits per rij gebruikt) */
 static const uint8_t FONT_5X7[128][7] = {
@@ -174,6 +169,28 @@ static void emu_destroy(Emulator *emu) {
     }
 }
 
+static VideoStandard video_standard_from_filename(const char *path) {
+    const char *name = strrchr(path, '/');
+#ifdef _WIN32
+    const char *windows_name = strrchr(path, '\\');
+    if (!name || (windows_name && windows_name > name)) name = windows_name;
+#endif
+    name = name ? name + 1 : path;
+    for (const char *p = name; p[0] && p[1] && p[2]; p++) {
+        if (tolower((unsigned char)p[0]) == 'p' &&
+            tolower((unsigned char)p[1]) == 'a' &&
+            tolower((unsigned char)p[2]) == 'l') return VIDEO_PAL;
+    }
+    return VIDEO_NTSC;
+}
+
+static void emu_set_video_standard(Emulator *emu, VideoStandard standard) {
+    emu->standard = standard;
+    tia_set_video_standard(&emu->tia, standard);
+    tia_audio_set_video_standard(&emu->audio, standard);
+    cart_set_video_standard(&emu->cart, standard);
+}
+
 static bool emu_load_rom(Emulator *emu, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -224,12 +241,14 @@ static bool emu_load_rom(Emulator *emu, const char *path) {
 
     tia_audio_init(&emu->audio);
     tia_init(&emu->tia, &emu->audio);
+    emu_set_video_standard(emu, video_standard_from_filename(base));
     riot_init(&emu->riot);
     bus_init(&emu->bus, &emu->tia, &emu->riot, &emu->cart, tia_step, tia_read, tia_write);
     cpu_init(&emu->cpu, &emu->bus);
     emu->loaded = true;
 
-    printf("Geladen: %s\n", emu->cart.name);
+    printf("Geladen: %s [%s]\n", emu->cart.name,
+           emu->standard == VIDEO_PAL ? "PAL" : "NTSC");
     return true;
 }
 
@@ -278,18 +297,18 @@ static void overlay_scan_roms(OverlayState *ov) {
     }
 }
 
-static void overlay_draw_fps(SDL_Renderer *renderer, double fps, int win_w) {
+static void overlay_draw_fps(SDL_Renderer *renderer, double fps, int win_w, VideoStandard standard) {
     SDL_Color green = { 0, 255, 120, 255 };
     char buf[160];
-    snprintf(buf, sizeof(buf), "FPS: %.1f", fps);
-    draw_text(renderer, win_w - 150, 25, buf, green, 2);
+    snprintf(buf, sizeof(buf), "%s FPS: %.1f", standard == VIDEO_PAL ? "PAL" : "NTSC", fps);
+    draw_text(renderer, win_w - 220, 25, buf, green, 2);
 }
 
 static void overlay_draw_help(OverlayState *ov, SDL_Renderer *renderer, int win_w) {
     SDL_Color green = { 0, 255, 120, 255 };
 
     draw_overlay_box(renderer, 15, 15, win_w - 30, 70, 225);
-    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | F3: Disable Frame limit | F4: Increase overscan | F5: Decrease overscan | ESC: Quit", green, 2);
+    draw_text(renderer, 25, 25, "F1: Help | F2: ROMs | F3: Frame limit | F4: PAL/NTSC | ESC: Quit", green, 2);
     draw_text(renderer, 25, 55, "ASWD: Movement CTRL/SHIFT: Fire/Reset", green, 2);
 
 
@@ -329,7 +348,7 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     }
 }
 
-static void overlay_render(OverlayState *ov, SDL_Renderer *renderer, int win_w, int win_h, double fps) {
+static void overlay_render(OverlayState *ov, SDL_Renderer *renderer, int win_w, int win_h, double fps, VideoStandard standard) {
     if (ov->show_rom_menu) {
         overlay_draw_rom_menu(ov, renderer, win_w, win_h);
     } else if (ov->show_help) {
@@ -337,7 +356,7 @@ static void overlay_render(OverlayState *ov, SDL_Renderer *renderer, int win_w, 
     }
 
     if (ov->show_help == false && ov->show_rom_menu == false) {
-        overlay_draw_fps(renderer, fps, win_w);
+        overlay_draw_fps(renderer, fps, win_w, standard);
     }
 }
 
@@ -406,7 +425,7 @@ int main(int argc, char **argv) {
     SDL_Renderer *renderer = SDL_CreateRenderer(
         window,
         -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
+        SDL_RENDERER_ACCELERATED
     );
     if (!renderer) {
         fprintf(stderr, "SDL_CreateRenderer fout: %s\n", SDL_GetError());
@@ -443,11 +462,6 @@ int main(int argc, char **argv) {
     uint32_t max_queued_bytes  = 0;
     if (audio_dev > 0) {
         SDL_PauseAudioDevice(audio_dev, 0);
-        double max_frames = 3;
-        size_t bytes_per_sample = sizeof(int16_t) * (size_t)have.channels;
-        max_queued_bytes = (uint32_t)(
-            ((double)have.freq / current_fps) * max_frames * (double)bytes_per_sample
-        );
     }
 
     Emulator emu;
@@ -458,7 +472,6 @@ int main(int argc, char **argv) {
     int16_t audio_tmp[4096];
     bool running = true;
     const uint64_t perf_freq = SDL_GetPerformanceFrequency();
-    const double target_frame_ms = 1000.0 / 60.0; /* ~16.6667 ms */
     OverlayState overlay = {0};
     snprintf(overlay.rom_dir, sizeof(overlay.rom_dir), "roms");
     overlay.show_help = false;
@@ -471,8 +484,6 @@ int main(int argc, char **argv) {
         overlay.show_rom_menu = false;
     }
     
-    double overscan = 1.00;
-    
     while (running) {
         uint64_t frame_start = SDL_GetPerformanceCounter();
         SDL_Event ev;
@@ -481,15 +492,10 @@ int main(int argc, char **argv) {
             if (ev.type == SDL_KEYDOWN) {
                 SDL_Keycode key = ev.key.keysym.sym;
 
-                if (key == SDLK_F4) {
-                    overscan += 0.01;
-                }
-                
-                if (key == SDLK_F5) {
-                    if (overscan >  1.00) {
-                        overscan -= 0.01;
-                    }
-
+                if (key == SDLK_F4 && !ev.key.repeat && emu.loaded) {
+                    emu_set_video_standard(&emu, emu.standard == VIDEO_NTSC ? VIDEO_PAL : VIDEO_NTSC);
+                    if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
+                    printf("Video: %s\n", emu.standard == VIDEO_PAL ? "PAL" : "NTSC");
                 }
 
                 if (key == SDLK_F3 && uncapped == false) {
@@ -515,6 +521,7 @@ int main(int argc, char **argv) {
                             snprintf(rom_path, sizeof(rom_path), "%s/%s",
                                     overlay.rom_dir, overlay.roms[overlay.selected_rom_idx]);
                             if (emu_load_rom(&emu, rom_path)) {
+                                if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
                                 overlay.show_rom_menu = false;
                             }
                         }
@@ -587,6 +594,8 @@ int main(int argc, char **argv) {
             }
 
             if (audio_dev > 0) {
+                max_queued_bytes = (uint32_t)(((double)have.freq /
+                    video_frame_rate(emu.standard)) * 3.0 * sizeof(int16_t) * have.channels);
                 size_t n = tia_audio_take_samples(&emu.audio, audio_tmp, 4096);
                 if (n > 0) {
                     uint32_t bytes_to_queue = (uint32_t)(n * sizeof(int16_t));
@@ -619,14 +628,8 @@ int main(int argc, char **argv) {
             src_height = texture_height;
         }
 
-        int dst_height = (int)(win_h * overscan);
         SDL_Rect src_rect = {0, 0, TIA_FB_WIDTH, src_height};
-        SDL_Rect dst_rect = {
-            0,
-            (win_h - dst_height) / 2,
-            win_w,
-            dst_height
-        };
+        SDL_Rect dst_rect = {0, 0, win_w, win_h};
 
         SDL_RenderClear(renderer);
         if (src_height > 0 &&
@@ -634,9 +637,10 @@ int main(int argc, char **argv) {
             fprintf(stderr, "SDL_RenderCopy fout: %s\n", SDL_GetError());
         }
 
-        overlay_render(&overlay, renderer, win_w, win_h, current_fps);
+        overlay_render(&overlay, renderer, win_w, win_h, current_fps, emu.standard);
         SDL_RenderPresent(renderer);
         if (!uncapped) {
+            double target_frame_ms = 1000.0 / video_frame_rate(emu.standard);
             uint64_t frame_end = SDL_GetPerformanceCounter();
             double elapsed_ms = ((double)(frame_end - frame_start) * 1000.0) / (double)perf_freq;
             if (elapsed_ms < target_frame_ms) {
@@ -645,7 +649,7 @@ int main(int argc, char **argv) {
                     SDL_Delay((uint32_t)(remaining_ms - 1.0));
                 }
                 while ((((double)(SDL_GetPerformanceCounter() - frame_start) * 1000.0) / (double)perf_freq) < target_frame_ms) {
-                    /* Fijnafstemming tot exact 16.67 ms */
+                    /* Fijnafstemming van de framebegrenzer. */
                 }
             }
         }  

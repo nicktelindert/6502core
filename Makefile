@@ -5,7 +5,7 @@ CFLAGS_release = -O0 -Wall -Wextra -std=c11
 LDFLAGS = -lSDL2
 
 CORE_SRCS = cpu6502.c addressing.c bus.c tia.c riot.c cartridge.c audio.c
-CORE_HEADERS = cpu6502.h addressing.h bus.h tia.h riot.h cartridge.h detectchip.h audio.h
+CORE_HEADERS = cpu6502.h addressing.h bus.h tia.h riot.h cartridge.h detectchip.h audio.h video.h
 APP_SRCS = main.c $(CORE_SRCS)
 TEST_BIN = tests/cpu_test
 CART_TEST_BIN = tests/cartridge_test

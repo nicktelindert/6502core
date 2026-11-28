@@ -21,6 +21,10 @@ static void check_fresh_tia(const TIA *tia) {
 }
 
 int main(void) {
+    CHECK(video_standard_from_filename("/tmp/PAL_folder/game.bin") == VIDEO_NTSC);
+    CHECK(video_standard_from_filename("/tmp/game (PAL).bin") == VIDEO_PAL);
+    CHECK(video_standard_from_filename("/tmp/game-pal.a26") == VIDEO_PAL);
+    CHECK(video_standard_from_filename("/tmp/game.bin") == VIDEO_NTSC);
     char path[] = "/tmp/6502core-rom-XXXXXX";
     int fd = mkstemp(path);
     CHECK(fd >= 0);
@@ -35,6 +39,35 @@ int main(void) {
     Emulator emu = {0};
     CHECK(emu_load_rom(&emu, path));
     check_fresh_tia(&emu.tia);
+    CHECK(emu.standard == VIDEO_NTSC);
+    CHECK(emu.audio.step == TIA_AUDIO_RATE / TIA_OUT_RATE);
+    CHECK(video_frame_rate(VIDEO_NTSC) == 60.0);
+    CHECK(video_frame_rate(VIDEO_PAL) == 50.0);
+    uint8_t ntsc_color[3];
+    memcpy(ntsc_color, emu.tia.color_lut[0x38], 3);
+    emu_set_video_standard(&emu, VIDEO_PAL);
+    CHECK(emu.standard == VIDEO_PAL);
+    CHECK(emu.audio.step < TIA_AUDIO_RATE / TIA_OUT_RATE);
+    CHECK(memcmp(ntsc_color, emu.tia.color_lut[0x38], 3) != 0);
+    CHECK(memcmp(emu.tia.color_lut[0], emu.tia.color_lut[0x10], 3) == 0);
+    emu_set_video_standard(&emu, VIDEO_NTSC);
+    CHECK(memcmp(ntsc_color, emu.tia.color_lut[0x38], 3) == 0);
+    CHECK(emu.audio.step == TIA_AUDIO_RATE / TIA_OUT_RATE);
+    for (int i = 0; i < 256; i += 2)
+        CHECK(memcmp(emu.tia.color_lut[i], emu.tia.color_lut[i + 1], 3) == 0);
+    char pal_path[] = "/tmp/6502core-pal-XXXXXX";
+    int pal_fd = mkstemp(pal_path);
+    CHECK(pal_fd >= 0);
+    FILE *pal_file = fdopen(pal_fd, "wb");
+    CHECK(pal_file != NULL);
+    CHECK(fwrite(rom, 1, sizeof(rom), pal_file) == sizeof(rom));
+    CHECK(fclose(pal_file) == 0);
+    CHECK(emu_load_rom(&emu, pal_path));
+    CHECK(emu.standard == VIDEO_PAL);
+    CHECK(emu.audio.step < TIA_AUDIO_RATE / TIA_OUT_RATE);
+    CHECK(emu_load_rom(&emu, path));
+    CHECK(emu.standard == VIDEO_NTSC);
+    CHECK(unlink(pal_path) == 0);
     tia_write(&emu.tia, 0x00, 0x02);
     tia_write(&emu.tia, 0x01, 0x02);
     tia_write(&emu.tia, 0x04, 0x37);

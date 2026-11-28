@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "detectchip.h"
+#include "video.h"
 
 
 
@@ -43,4 +44,5 @@ void cart_write(Cartridge *cart, uint16_t addr, uint8_t val);
 void cart_fe_on_rts_hi(Cartridge *cart, uint8_t hi);
 void cart_fe_on_byte(Cartridge *cart, uint8_t val);
 void cart_step_cycles(Cartridge *cart, int cycles);
+void cart_set_video_standard(Cartridge *cart, VideoStandard standard);
 #endif /* CARTRIDGE_H */
