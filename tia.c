@@ -53,6 +53,16 @@ static NusizLayout get_nusiz_layout(uint8_t nusiz) {
     }
 }
 
+static bool missile_pixel(int x, int position, int width, NusizLayout layout) {
+    for (int i = 0; i < layout.num_offsets; i++) {
+        int dx = x - (position + layout.offsets[i]);
+        if (dx >= 0 && dx < width) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void compute_ntsc_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
     int hue = (color_byte >> 4) & 0x0F;
     int lum = (color_byte >> 1) & 0x07;
@@ -78,6 +88,7 @@ static void compute_ntsc_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
 }
 
 void tia_init(TIA *tia, TIAAudio *audio) {
+    memset(tia, 0, sizeof(*tia));
     tia->framebuffer_capacity = 0;
     tia->framebuffer = NULL;
     tia->frame_height = 0;
@@ -477,21 +488,8 @@ static void tia_render_pixel(TIA *tia, int clk) {
         }
     }
 
-    bool m0_on = false;
-    if (m0_en) {
-        int dx = x - m0_x;
-        if (0 <= dx && dx < m0_w) {
-            m0_on = true;
-        }
-    }
-
-    bool m1_on = false;
-    if (m1_en) {
-        int dx = x - m1_x;
-        if (0 <= dx && dx < m1_w) {
-            m1_on = true;
-        }
-    }
+    bool m0_on = m0_en && missile_pixel(x, m0_x, m0_w, lay0);
+    bool m1_on = m1_en && missile_pixel(x, m1_x, m1_w, lay1);
 
     bool bl_on = bl_en && (0 <= (x - bl_x) && (x - bl_x) < bl_w);
     bool pf_on = has_pf ? (pf_bits[x >> 2] != 0) : false;

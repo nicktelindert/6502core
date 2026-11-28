@@ -105,6 +105,30 @@ static void test_f6sc_cpu_hotspots(void) {
     cart_free(&cart);
 }
 
+static void test_branch_dummy_hotspot(void) {
+    Cartridge cart;
+    Bus bus;
+    CPU6507 cpu;
+    init_f6sc(&cart, &bus);
+    cpu_init(&cpu, &bus);
+    cart.rom_data[3 * 0x1000 + 0xFF4] = 0xD0; /* BNE +2 */
+    cart.rom_data[3 * 0x1000 + 0xFF5] = 0x02;
+
+    bus_write(&bus, 0xFFF9, 0);
+    cpu.PC = 0xFFF4;
+    cpu.status |= CPU_FLAG_Z;
+    CHECK(cpu_step(&cpu) == 2);
+    CHECK(cart.current_bank == 3);
+
+    cpu.PC = 0xFFF4;
+    cpu.status &= (uint8_t)~CPU_FLAG_Z;
+    CHECK(cpu_step(&cpu) == 3);
+    CHECK(cpu.PC == 0xFFF8);
+    CHECK(cart.current_bank == 0);
+    CHECK(bus.data_bus == 0x80);
+    cart_free(&cart);
+}
+
 static void test_f6sc_all_mirrors(void) {
     Cartridge cart;
     Bus bus;
@@ -322,6 +346,7 @@ static void test_f6sc_indexed_dummy_reads(void) {
 int main(void) {
     test_f6sc_hotspots();
     test_f6sc_cpu_hotspots();
+    test_branch_dummy_hotspot();
     test_f6sc_all_mirrors();
     test_f6sc_shared_ram();
     test_f6sc_bit_rom_switch();

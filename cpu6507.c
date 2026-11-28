@@ -98,20 +98,18 @@ static void branch_if(CPU6507 *cpu, bool condition, uint16_t addr) {
         return;
     }
 
-    /* Dummy-cycle van een genomen branch. */
-    bus_tick(cpu->bus, 1);
+    uint16_t old_pc = cpu->PC;
+    (void)cpu_read_mem(cpu, old_pc);
     cpu->extra_cycles += 1;
 
-    uint16_t old_pc = cpu->PC;
     bool crossed = (old_pc & 0xFF00u) != (addr & 0xFF00u);
 
-    cpu->PC = addr;
-
     if (crossed) {
-        /* Extra cycle bij branch over een paginagrens. */
-        bus_tick(cpu->bus, 1);
+        uint16_t uncorrected = (uint16_t)((old_pc & 0xFF00u) | (addr & 0x00FFu));
+        (void)cpu_read_mem(cpu, uncorrected);
         cpu->extra_cycles += 1;
     }
+    cpu->PC = addr;
 }
 
 static void instr_BNE(CPU6507 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_Z), addr); }

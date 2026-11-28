@@ -9,10 +9,9 @@ The goal of **6502core** is to provide a clean, cycle-oriented MOS 6502 CPU core
 After researching and documenting the hardware behavior, I rewrote the TIA to render at the **color-clock level**. This provides more accurate video and audio timing than the earlier scanline-based approach. Scanline tracking remains useful for frame bookkeeping, but it does not replace color-clock rendering.
 
 ## Tests
-Run `make test` for CPU cycle tests and synthetic F6SC/F8SC cartridge tests. The cartridge tests cover bank-switch hotspots, 6507 address mirrors, shared Superchip RAM, switching banks with a `BIT` instruction, and indexed dummy reads.
+Run `make test` for CPU cycle tests and synthetic F6SC/F8SC cartridge tests. The cartridge tests cover bank-switch hotspots, 6507 address mirrors, shared Superchip RAM, switching banks with a `BIT` instruction, and indexed and branch dummy reads.
 
-F6SC and F8SC write-port reads overwrite the addressed Superchip RAM byte. The floating bus value is approximated by the most recent modeled bus value; real hardware does not guarantee a particular value, and not all CPU dummy accesses are modeled.
-
+I also added extended testing for the riot timer, tia and rom reloaded because i had issues with the timing after reloaded certain roms.
 
 ## Roadmap
 - [x] Rewrite core emulator from Python to C

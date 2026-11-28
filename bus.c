@@ -58,10 +58,6 @@ uint8_t bus_read(Bus *bus, uint16_t address) {
     } else if (addr & 0x1000u) {
         bus_tick(bus, 1);
         value = cart ? cart_read(cart, addr, bus->data_bus) : 0xFFu;
-    } else if ((addr & 0x0280u) == 0x0280u && (addr & 0x001Fu) == 0x04u) {
-        /* INTIM is read before the cycle tick for DPC timing. */
-        value = bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
-        bus_tick(bus, 1);
     } else {
         bus_tick(bus, 1);
         if ((addr & 0x0280u) == 0x0280u) {

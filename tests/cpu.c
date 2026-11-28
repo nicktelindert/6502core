@@ -2,6 +2,7 @@
 
 #include "../cpu6507.h"
 #include "../bus.h"
+#include "../tia.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -65,21 +66,56 @@ static void test_branch_taken(void) {
 
     put_ram(&bus, 0x0080, 0xD0); /* BNE +2 */
     put_ram(&bus, 0x0081, 0x02);
+    put_ram(&bus, 0x0082, 0x5A);
 
     CHECK(cpu_step(&cpu) == 3);
     CHECK(cpu.PC == 0x0084);
+    CHECK(bus.data_bus == 0x5A);
+}
+
+static uint16_t branch_read_address;
+static int branch_read_cycle;
+static Bus *branch_bus;
+
+static uint8_t branch_tia_read(TIA *tia, uint16_t address) {
+    (void)tia;
+    branch_read_address = address;
+    branch_read_cycle = bus_get_cycles_this_step(branch_bus);
+    return 0xA5;
 }
 
 static void test_branch_page_cross(void) {
     Bus bus;
     CPU6507 cpu;
+    TIA tia = {0};
     setup(&bus, &cpu, 0x01FD);
+    bus.tia = &tia;
+    bus.tia_read = branch_tia_read;
+    branch_bus = &bus;
+    branch_read_address = 0;
+    branch_read_cycle = 0;
 
     put_ram(&bus, 0x01FD, 0xD0); /* BNE +2: $01FF -> $0201 */
     put_ram(&bus, 0x01FE, 0x02);
 
     CHECK(cpu_step(&cpu) == 4);
     CHECK(cpu.PC == 0x0201);
+    CHECK(branch_read_address == 0x0101);
+    CHECK(branch_read_cycle == 4);
+    CHECK(bus.data_bus == 0xA5);
+}
+
+static void test_branch_page_cross_backward(void) {
+    Bus bus;
+    CPU6507 cpu;
+    setup(&bus, &cpu, 0x00FE);
+    put_ram(&bus, 0x00FE, 0xD0);
+    put_ram(&bus, 0x00FF, 0x80); /* $0100 -> $0080 */
+    put_ram(&bus, 0x0080, 0x5A);
+
+    CHECK(cpu_step(&cpu) == 4);
+    CHECK(cpu.PC == 0x0080);
+    CHECK(bus.data_bus == 0x5A); /* uncorrected address $0180 */
 }
 
 static void test_pla_cycles(void) {
@@ -338,6 +374,7 @@ int main(void) {
     test_branch_not_taken();
     test_branch_taken();
     test_branch_page_cross();
+    test_branch_page_cross_backward();
     test_pla_cycles();
     test_plp_cycles();
     test_absx_page_cross_cycles();
@@ -357,4 +394,3 @@ int main(void) {
     puts("CPU cycle tests passed");
     return EXIT_SUCCESS;
 }
-

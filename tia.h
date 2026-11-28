@@ -106,6 +106,7 @@ typedef struct TIA {
     uint8_t ntsc_lut[256][3];
 } TIA;
 
+/* Destroy an initialized TIA before reinitializing it. */
 void tia_init(TIA *tia, TIAAudio *audio);
 uint8_t tia_read(TIA *tia, uint16_t addr);
 void tia_write(TIA *tia, uint16_t addr, uint8_t val);
