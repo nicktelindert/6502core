@@ -21,6 +21,61 @@ static void check_fresh_tia(const TIA *tia) {
     CHECK(tia->inpt4 == 0x80 && tia->inpt5 == 0x80);
 }
 
+static void test_5200_keyboard_mapping(void) {
+    Emulator emu = {0};
+    uint8_t keys[SDL_NUM_SCANCODES] = {0};
+    pokey5200_init(&emu.pokey5200);
+    gtia5200_init(&emu.gtia5200);
+    handle_5200_input(&emu, keys, true);
+    CHECK(emu.pokey5200.pot_input[0] == 114 && emu.pokey5200.pot_input[1] == 114);
+    keys[SDL_SCANCODE_LEFT] = keys[SDL_SCANCODE_W] = 1;
+    keys[SDL_SCANCODE_LCTRL] = keys[SDL_SCANCODE_SPACE] = keys[SDL_SCANCODE_RETURN] = 1;
+    handle_5200_input(&emu, keys, true);
+    CHECK(emu.pokey5200.pot_input[0] == 6 && emu.pokey5200.pot_input[1] == 6);
+    CHECK(!emu.gtia5200.trigger[0] && emu.pokey5200.upper_trigger[0]);
+    CHECK(emu.pokey5200.keypad[0] == (1u << 12));
+    keys[SDL_SCANCODE_RIGHT] = 1;
+    handle_5200_input(&emu, keys, true);
+    CHECK(emu.pokey5200.pot_input[0] == 114);
+    handle_5200_input(&emu, keys, false);
+    CHECK(emu.pokey5200.pot_input[0] == 114 && emu.pokey5200.pot_input[1] == 114);
+    CHECK(emu.gtia5200.trigger[0] && !emu.pokey5200.upper_trigger[0] && !emu.pokey5200.keypad[0]);
+    memset(keys, 0, sizeof(keys));
+    keys[SDL_SCANCODE_LSHIFT] = keys[SDL_SCANCODE_8] = 1;
+    handle_5200_input(&emu, keys, true);
+    CHECK(emu.pokey5200.keypad[0] == (1u << 3));
+    keys[SDL_SCANCODE_8] = 0;
+    keys[SDL_SCANCODE_3] = 1;
+    handle_5200_input(&emu, keys, true);
+    CHECK(emu.pokey5200.keypad[0] == (1u << 1));
+    static const struct { SDL_Scancode key; unsigned code; } cases[] = {
+        {SDL_SCANCODE_1, 15}, {SDL_SCANCODE_2, 14}, {SDL_SCANCODE_3, 13},
+        {SDL_SCANCODE_4, 11}, {SDL_SCANCODE_5, 10}, {SDL_SCANCODE_6, 9},
+        {SDL_SCANCODE_7, 7}, {SDL_SCANCODE_8, 6}, {SDL_SCANCODE_9, 5},
+        {SDL_SCANCODE_0, 2}, {SDL_SCANCODE_KP_MULTIPLY, 3}, {SDL_SCANCODE_KP_DIVIDE, 1},
+        {SDL_SCANCODE_KP_1, 15}, {SDL_SCANCODE_KP_2, 14}, {SDL_SCANCODE_KP_3, 13},
+        {SDL_SCANCODE_KP_4, 11}, {SDL_SCANCODE_KP_5, 10}, {SDL_SCANCODE_KP_6, 9},
+        {SDL_SCANCODE_KP_7, 7}, {SDL_SCANCODE_KP_8, 6}, {SDL_SCANCODE_KP_9, 5},
+        {SDL_SCANCODE_KP_0, 2}, {SDL_SCANCODE_RETURN, 12}, {SDL_SCANCODE_KP_ENTER, 12},
+        {SDL_SCANCODE_P, 8}, {SDL_SCANCODE_R, 4}
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        memset(keys, 0, sizeof(keys));
+        keys[cases[i].key] = 1;
+        handle_5200_input(&emu, keys, true);
+        CHECK(emu.pokey5200.keypad[0] == (1u << cases[i].code));
+    }
+    memset(keys, 0, sizeof(keys));
+    keys[SDL_SCANCODE_D] = keys[SDL_SCANCODE_DOWN] = 1;
+    keys[SDL_SCANCODE_RCTRL] = 1;
+    handle_5200_input(&emu, keys, true);
+    CHECK(emu.pokey5200.pot_input[0] == 220 && emu.pokey5200.pot_input[1] == 220);
+    CHECK(!emu.gtia5200.trigger[0] && !emu.pokey5200.upper_trigger[0]);
+    memset(keys, 0, sizeof(keys));
+    handle_5200_input(&emu, keys, true);
+    CHECK(emu.gtia5200.trigger[0] && emu.pokey5200.pot_input[0] == 114);
+}
+
 static void test_frame_pacer(void) {
     uint64_t frequency = SDL_GetPerformanceFrequency();
     for (int standard = VIDEO_NTSC; standard <= VIDEO_PAL; standard++) {
@@ -75,8 +130,89 @@ static void test_browser_keys(void) {
     CHECK(overlay_open_browser(&ov, folder, true));
     CHECK(!overlay_browser_key(&ov, SDLK_ESCAPE, path, sizeof(path)));
     CHECK(!ov.show_rom_menu && strcmp(ov.rom_dir, folder) == 0);
+    char bios[ROM_PATH_MAX];
+    CHECK(snprintf(bios, sizeof(bios), "%s/5200bios.dat", folder) < (int)sizeof(bios));
+    f = fopen(bios, "wb");
+    CHECK(f);
+    uint8_t bytes[2048] = {0};
+    CHECK(fwrite(bytes, 1, sizeof(bytes), f) == sizeof(bytes) && fclose(f) == 0);
+    CHECK(overlay_open_filtered(&ov, folder, BROWSER_ALL_FILES));
+    CHECK(ov.selecting_bios && ov.browser.count == 3);
+    CHECK(!overlay_browser_key(&ov, SDLK_DOWN, path, sizeof(path)));
+    CHECK(overlay_browser_key(&ov, SDLK_RETURN, path, sizeof(path)));
+    CHECK(strcmp(path, bios) == 0);
+    CHECK(overlay_select_bios(&ov, path));
+    CHECK(!ov.show_rom_menu && strcmp(ov.bios_path, bios) == 0);
+    CHECK(bios_config_load(path, sizeof(path), error, sizeof(error)) == ROM_CONFIG_OK);
+    CHECK(strcmp(path, bios) == 0);
+    CHECK(!overlay_select_bios(&ov, rom));
+    CHECK(strcmp(ov.bios_path, bios) == 0);
+    CHECK(bios_config_load(path, sizeof(path), error, sizeof(error)) == ROM_CONFIG_OK);
+    CHECK(strcmp(path, bios) == 0);
+    CHECK(setenv("XDG_CONFIG_HOME", rom, 1) == 0);
+    CHECK(!overlay_select_bios(&ov, bios));
+    CHECK(strcmp(ov.bios_path, bios) == 0);
+    CHECK(setenv("XDG_CONFIG_HOME", config, 1) == 0);
+    CHECK(bios_config_load(path, sizeof(path), error, sizeof(error)) == ROM_CONFIG_OK);
+    CHECK(strcmp(path, bios) == 0);
     rom_browser_free(&ov.browser);
-    CHECK(unlink(rom) == 0 && rmdir(folder) == 0);
+    CHECK(unlink(bios) == 0 && unlink(rom) == 0 && rmdir(folder) == 0);
+    CHECK(snprintf(path, sizeof(path), "%s/6502core/config.ini", config) < (int)sizeof(path));
+    CHECK(unlink(path) == 0);
+    CHECK(snprintf(path, sizeof(path), "%s/6502core", config) < (int)sizeof(path));
+    CHECK(rmdir(path) == 0 && rmdir(config) == 0 && rmdir(tmp) == 0);
+}
+
+static void test_experimental_5200(void) {
+    char tmp[] = "/tmp/6502core-5200-XXXXXX";
+    CHECK(mkdtemp(tmp) != NULL);
+    char config[ROM_PATH_MAX], bios[ROM_PATH_MAX], rompath[ROM_PATH_MAX], path[ROM_PATH_MAX];
+    CHECK(snprintf(config, sizeof(config), "%s/config", tmp) < (int)sizeof(config));
+    CHECK(snprintf(bios, sizeof(bios), "%s/bios.dat", tmp) < (int)sizeof(bios));
+    CHECK(snprintf(rompath, sizeof(rompath), "%s/game.A52", tmp) < (int)sizeof(rompath));
+    CHECK(setenv("XDG_CONFIG_HOME", config, 1) == 0);
+    uint8_t firmware[2048] = {0};
+    firmware[0] = 0xa9; firmware[1] = 0x4e;
+    firmware[2] = 0x8d; firmware[3] = 0x1a; firmware[4] = 0xc0;
+    firmware[5] = 0x4c; firmware[6] = 0x05; firmware[7] = 0xf8;
+    firmware[0x7fc] = 0; firmware[0x7fd] = 0xf8;
+    FILE *f = fopen(bios, "wb");
+    CHECK(f && fwrite(firmware, 1, sizeof(firmware), f) == sizeof(firmware) && fclose(f) == 0);
+    uint8_t data[0x8000] = {0};
+    f = fopen(rompath, "wb");
+    CHECK(f && fwrite(data, 1, 0x2000, f) == 0x2000 && fclose(f) == 0);
+    Emulator emu = {0};
+    CHECK(!emu_load_rom(&emu, rompath) && !emu.loaded);
+    CHECK(strstr(emu.load_error, "BIOS") != NULL);
+    char error[256];
+    CHECK(bios_config_save(bios, error, sizeof(error)));
+    CHECK(emu_load_rom(&emu, rompath));
+    CHECK(emu.loaded && emu.is_5200 && emu.system5200.cart_type == SYSTEM5200_CART_8K);
+    CHECK(emu.cpu.PC == 0xf800);
+    CHECK(emu_step_5200_frame(&emu) && !emu.warned_5200);
+    CHECK(emu.gtia5200.framebuffer[0][0] == 0x4e);
+    CHECK(!emu_load_rom(&emu, "/missing.a52") && emu.loaded && emu.is_5200);
+    CHECK(snprintf(path, sizeof(path), "%s/game.a26", tmp) < (int)sizeof(path));
+    data[0xffc] = 0; data[0xffd] = 0xf1;
+    f = fopen(path, "wb");
+    CHECK(f && fwrite(data, 1, 0x1000, f) == 0x1000 && fclose(f) == 0);
+    CHECK(emu_load_rom(&emu, path) && emu.loaded && !emu.is_5200);
+    CHECK(emu_load_rom(&emu, rompath) && emu.loaded && emu.is_5200);
+    CHECK(unlink(path) == 0);
+    for (unsigned i = 0; i < 3; i++) {
+        static const size_t sizes[] = {0x1000, 0x4000, 0x8000};
+        static const System5200CartType types[] = {SYSTEM5200_CART_4K, SYSTEM5200_CART_16K, SYSTEM5200_CART_32K};
+        f = fopen(rompath, "wb");
+        CHECK(f && fwrite(data, 1, sizes[i], f) == sizes[i] && fclose(f) == 0);
+        CHECK(emu_load_rom(&emu, rompath) && emu.system5200.cart_type == types[i]);
+    }
+    f = fopen(rompath, "wb");
+    CHECK(f && fwrite(data, 1, 512, f) == 512 && fclose(f) == 0);
+    CHECK(!emu_load_rom(&emu, rompath) && emu.loaded && emu.is_5200);
+    emu.antic5200.unsupported = true;
+    CHECK(emu_step_5200_frame(&emu) && emu.warned_5200);
+    emu_destroy(&emu);
+    CHECK(unlink(bios) == 0 && unlink(rompath) == 0);
     CHECK(snprintf(path, sizeof(path), "%s/6502core/config.ini", config) < (int)sizeof(path));
     CHECK(unlink(path) == 0);
     CHECK(snprintf(path, sizeof(path), "%s/6502core", config) < (int)sizeof(path));
@@ -84,8 +220,10 @@ static void test_browser_keys(void) {
 }
 
 int main(void) {
+    test_5200_keyboard_mapping();
     test_frame_pacer();
     test_browser_keys();
+    test_experimental_5200();
     CHECK(video_standard_from_filename("/tmp/PAL_folder/game.bin") == VIDEO_NTSC);
     CHECK(video_standard_from_filename("/tmp/game (PAL).bin") == VIDEO_PAL);
     CHECK(video_standard_from_filename("/tmp/game-pal.a26") == VIDEO_PAL);
@@ -103,6 +241,9 @@ int main(void) {
 
     Emulator emu = {0};
     CHECK(emu_load_rom(&emu, path));
+    CHECK(is_5200_rom("game.a52") && is_5200_rom("game.A52"));
+    CHECK(!is_5200_rom("game.a26") && !is_5200_rom("game.a52.bin"));
+    CHECK(!emu_load_rom(&emu, "game.a52") && emu.loaded);
     check_fresh_tia(&emu.tia);
     CHECK(emu.standard == VIDEO_NTSC);
     CHECK(emu.audio.step == TIA_AUDIO_RATE / TIA_OUT_RATE);
@@ -167,7 +308,7 @@ int main(void) {
     for (int i = 0; i < 2; i++) {
         CHECK(emu_load_rom(&emu, path));
         CHECK(emu.cart.type == CART_TYPE_DPC);
-        CHECK(bus_step_frame(&emu.bus, &emu.cpu));
+        CHECK(system2600_step_frame(&emu.system2600, &emu.cpu));
         CHECK(emu.tia.completed_frame_height > 0);
     }
     emu_destroy(&emu);

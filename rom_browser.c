@@ -59,7 +59,8 @@ static int hex_value(char c) {
     return -1;
 }
 
-RomConfigResult rom_config_load(char *path, size_t size, char *error, size_t error_size) {
+static RomConfigResult config_load_key(const char *key, char *path, size_t size,
+                                       char *error, size_t error_size) {
     char dir[ROM_PATH_MAX], filename[ROM_PATH_MAX];
     if (!config_dir(dir, sizeof(dir)) || !join_path(filename, sizeof(filename), dir, "config.ini")) {
         set_error(error, error_size, "Config path");
@@ -78,9 +79,9 @@ RomConfigResult rom_config_load(char *path, size_t size, char *error, size_t err
         size_t len = strlen(line);
         while (len && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
         if (line[0] == '[') section = strcmp(line, "[6502core]") == 0;
-        else if (section && strncmp(line, "rom_dir=", 8) == 0) {
+        else if (section && strncmp(line, key, strlen(key)) == 0 && line[strlen(key)] == '=') {
             size_t j = 0;
-            const char *value = line + 8;
+            const char *value = line + strlen(key) + 1;
             for (size_t i = 0; value[i]; i++) {
                 unsigned char c = (unsigned char)value[i];
                 if (c == '%') {
@@ -101,19 +102,43 @@ RomConfigResult rom_config_load(char *path, size_t size, char *error, size_t err
     if (ferror(f)) valid = false;
     free(line);
     if (fclose(f) != 0) valid = false;
+    if (!valid || (found && (!size || path[0] != '/'))) {
+        snprintf(error, error_size, "Invalid path in config");
+        return ROM_CONFIG_ERROR;
+    }
+    return found ? ROM_CONFIG_OK : ROM_CONFIG_MISSING;
+}
+
+RomConfigResult rom_config_load(char *path, size_t size, char *error, size_t error_size) {
+    RomConfigResult result = config_load_key("rom_dir", path, size, error, error_size);
+    if (result != ROM_CONFIG_OK) return result;
     struct stat st;
-    if (!found || !valid || !size || path[0] != '/' || stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
         snprintf(error, error_size, "Invalid or unavailable ROM folder in config");
         return ROM_CONFIG_ERROR;
     }
     return ROM_CONFIG_OK;
 }
 
-bool rom_config_save(const char *path, char *error, size_t error_size) {
+RomConfigResult bios_config_load(char *path, size_t size, char *error, size_t error_size) {
+    return config_load_key("bios_5200", path, size, error, error_size);
+}
+
+static bool write_config_entry(FILE *f, const char *key, const char *path) {
+    bool ok = fprintf(f, "%s=", key) >= 0;
+    for (const unsigned char *p = (const unsigned char *)path; *p && ok; p++) {
+        if (*p == '%' || *p == '\n' || *p == '\r')
+            ok = fprintf(f, "%%%02X", *p) >= 0;
+        else
+            ok = fputc(*p, f) != EOF;
+    }
+    return ok && fputc('\n', f) != EOF;
+}
+
+static bool config_save_key(const char *key, const char *path, char *error, size_t error_size) {
     char dir[ROM_PATH_MAX], filename[ROM_PATH_MAX], temp[ROM_PATH_MAX];
-    struct stat st;
-    if (path[0] != '/' || stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        snprintf(error, error_size, "ROM folder is not available");
+    if (!path || path[0] != '/') {
+        snprintf(error, error_size, "Config path must be absolute");
         return false;
     }
     if (!config_dir(dir, sizeof(dir)) || !ensure_dirs(dir) ||
@@ -122,23 +147,53 @@ bool rom_config_save(const char *path, char *error, size_t error_size) {
         set_error(error, error_size, "Create config directory");
         return false;
     }
+    FILE *old = fopen(filename, "r");
+    if (!old && errno != ENOENT) {
+        set_error(error, error_size, "Open config");
+        return false;
+    }
     int fd = mkstemp(temp);
-    if (fd < 0) { set_error(error, error_size, "Create config"); return false; }
+    if (fd < 0) { set_error(error, error_size, "Create config"); if (old) fclose(old); return false; }
     FILE *f = fdopen(fd, "w");
     if (!f) {
         set_error(error, error_size, "Open config");
         close(fd);
+        if (old) fclose(old);
         unlink(temp);
         return false;
     }
-    bool ok = fputs("[6502core]\nrom_dir=", f) >= 0;
-    for (const unsigned char *p = (const unsigned char *)path; *p && ok; p++) {
-        if (*p == '%' || *p == '\n' || *p == '\r')
-            ok = fprintf(f, "%%%02X", *p) >= 0;
-        else
-            ok = fputc(*p, f) != EOF;
+    bool ok = true, section = false, found_section = false, written = false, last_newline = true;
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t len;
+    while (old && ok && (len = getline(&line, &cap, old)) >= 0) {
+        if (line[0] == '[') {
+            if (section && !written) {
+                if (!last_newline) ok = fputc('\n', f) != EOF;
+                if (ok) ok = write_config_entry(f, key, path);
+                written = true;
+            }
+            section = strncmp(line, "[6502core]", 10) == 0 &&
+                      (line[10] == '\n' || line[10] == '\r' || line[10] == '\0');
+            if (section) found_section = true;
+        }
+        if (section && strncmp(line, key, strlen(key)) == 0 && line[strlen(key)] == '=') {
+            if (!written) ok = write_config_entry(f, key, path);
+            written = true;
+            last_newline = true;
+        } else {
+            if (ok) ok = fwrite(line, 1, (size_t)len, f) == (size_t)len;
+            last_newline = len > 0 && line[len - 1] == '\n';
+        }
     }
-    if (ok) ok = fputc('\n', f) != EOF;
+    if (old && ferror(old)) ok = false;
+    if (old && fclose(old) != 0) ok = false;
+    free(line);
+    if (ok && !written) {
+        if (!last_newline) ok = fputc('\n', f) != EOF;
+        if (ok && !found_section) ok = fputs("[6502core]\n", f) >= 0;
+        if (ok) ok = write_config_entry(f, key, path);
+    }
     if (fclose(f) != 0) ok = false;
     if (ok && rename(temp, filename) != 0) ok = false;
     if (!ok) {
@@ -146,6 +201,19 @@ bool rom_config_save(const char *path, char *error, size_t error_size) {
         unlink(temp);
     }
     return ok;
+}
+
+bool rom_config_save(const char *path, char *error, size_t error_size) {
+    struct stat st;
+    if (!path || path[0] != '/' || stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        snprintf(error, error_size, "ROM folder is not available");
+        return false;
+    }
+    return config_save_key("rom_dir", path, error, error_size);
+}
+
+bool bios_config_save(const char *path, char *error, size_t error_size) {
+    return config_save_key("bios_5200", path, error, error_size);
 }
 
 void rom_browser_free(RomBrowser *browser) {
@@ -161,7 +229,8 @@ static bool is_rom(const char *name) {
     size_t n = strlen(ext);
     if (n >= sizeof(lower)) return false;
     for (size_t i = 0; i <= n; i++) lower[i] = (char)tolower((unsigned char)ext[i]);
-    return strcmp(lower, ".bin") == 0 || strcmp(lower, ".a26") == 0 || strcmp(lower, ".rom") == 0;
+    return strcmp(lower, ".bin") == 0 || strcmp(lower, ".a26") == 0 ||
+           strcmp(lower, ".a52") == 0 || strcmp(lower, ".rom") == 0;
 }
 
 static int compare_entries(const void *a, const void *b) {
@@ -178,6 +247,12 @@ bool rom_browser_path(const RomBrowser *browser, size_t index, char *path, size_
 
 bool rom_browser_open(RomBrowser *browser, const char *path, bool directories_only,
                       char *error, size_t error_size) {
+    return rom_browser_open_filtered(browser, path, directories_only ? BROWSER_DIRECTORIES : BROWSER_ROMS,
+                                     error, error_size);
+}
+
+bool rom_browser_open_filtered(RomBrowser *browser, const char *path, BrowserFilter filter,
+                               char *error, size_t error_size) {
     RomBrowser next = {0};
     char *resolved = realpath(path, NULL);
     if (!resolved) { set_error(error, error_size, "Open folder"); return false; }
@@ -208,7 +283,8 @@ bool rom_browser_open(RomBrowser *browser, const char *path, bool directories_on
             continue;
         }
         bool is_dir = S_ISDIR(st.st_mode);
-        if (!is_dir && (directories_only || !S_ISREG(st.st_mode) || !is_rom(entry->d_name))) continue;
+        if (!is_dir && (!S_ISREG(st.st_mode) || filter == BROWSER_DIRECTORIES ||
+                        (filter == BROWSER_ROMS && !is_rom(entry->d_name)))) continue;
         if (next.count == capacity) {
             size_t new_capacity = capacity ? capacity * 2 : 16;
             RomBrowserEntry *items = realloc(next.entries, new_capacity * sizeof(*items));

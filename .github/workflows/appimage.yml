@@ -21,6 +21,11 @@ jobs:
           sudo apt-get install -y build-essential libsdl2-dev desktop-file-utils
       - name: Run tests
         run: make test
+      - name: Verify Atari 2600 video demo
+        run: |
+          make 2600-demo
+          SDL_VIDEODRIVER=dummy ./2600-demo --once
+          SDL_VIDEODRIVER=dummy ./2600-demo --pal --once
       - name: Download verified linuxdeploy
         run: |
           curl -fL --retry 3 -o "$RUNNER_TEMP/linuxdeploy.AppImage" \

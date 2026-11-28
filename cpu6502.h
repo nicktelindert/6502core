@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-typedef struct Bus Bus;
 typedef struct CPU6502 CPU6502;
 
 typedef struct {
@@ -66,7 +65,6 @@ struct CPU6502 {
     OpcodeEntry opcodes[256];
 };
 
-void cpu_init(CPU6502 *cpu, Bus *bus);
 void cpu_init_with_bus(CPU6502 *cpu, CpuBus bus);
 void cpu_reset(CPU6502 *cpu);
 /* asserted=true represents an active (low) input pin. */

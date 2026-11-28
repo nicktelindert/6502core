@@ -1,7 +1,7 @@
 // Tests for the 6502 CPU implementation on the Atari 2600 bus
 
 #include "../cpu6502.h"
-#include "../bus.h"
+#include "../system2600.h"
 #include "../tia.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,15 +14,15 @@
     } \
 } while (0)
 
-static void put_ram(Bus *bus, uint16_t address, uint8_t value) {
+static void put_ram(System2600 *bus, uint16_t address, uint8_t value) {
     /* RIOT-RAM mirrors: A7=1, A9=0. */
     CHECK((address & 0x0280u) == 0x0080u);
     bus->ram[address & 0x007Fu] = value;
 }
 
-static void setup(Bus *bus, CPU6502 *cpu, uint16_t pc) {
-    bus_init(bus, NULL, NULL, NULL, NULL, NULL, NULL);
-    cpu_init(cpu, bus);
+static void setup(System2600 *bus, CPU6502 *cpu, uint16_t pc) {
+    system2600_init(bus, NULL, NULL, NULL, NULL, NULL, NULL);
+    cpu_init_with_bus(cpu, system2600_cpu_bus(bus));
 
     cpu->PC = pc;
     cpu->A = 0;
@@ -30,11 +30,11 @@ static void setup(Bus *bus, CPU6502 *cpu, uint16_t pc) {
     cpu->Y = 0;
     cpu->SP = 0xFD;
     cpu->status = CPU_FLAG_U;
-    bus_reset_cycles_this_step(bus);
+    system2600_reset_cycles_this_step(bus);
 }
 
 static void test_immediate_load(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -47,7 +47,7 @@ static void test_immediate_load(void) {
 }
 
 static void test_branch_not_taken(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -60,7 +60,7 @@ static void test_branch_not_taken(void) {
 }
 
 static void test_branch_taken(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -75,17 +75,17 @@ static void test_branch_taken(void) {
 
 static uint16_t branch_read_address;
 static int branch_read_cycle;
-static Bus *branch_bus;
+static System2600 *branch_bus;
 
 static uint8_t branch_tia_read(TIA *tia, uint16_t address) {
     (void)tia;
     branch_read_address = address;
-    branch_read_cycle = bus_get_cycles_this_step(branch_bus);
+    branch_read_cycle = system2600_get_cycles_this_step(branch_bus);
     return 0xA5;
 }
 
 static void test_branch_page_cross(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     TIA tia = {0};
     setup(&bus, &cpu, 0x01FD);
@@ -106,7 +106,7 @@ static void test_branch_page_cross(void) {
 }
 
 static void test_branch_page_cross_backward(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x00FE);
     put_ram(&bus, 0x00FE, 0xD0);
@@ -119,7 +119,7 @@ static void test_branch_page_cross_backward(void) {
 }
 
 static void test_pla_cycles(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -134,7 +134,7 @@ static void test_pla_cycles(void) {
 }
 
 static void test_plp_cycles(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -151,7 +151,7 @@ static void test_plp_cycles(void) {
 }
 
 static void test_absx_page_cross_cycles(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -165,7 +165,7 @@ static void test_absx_page_cross_cycles(void) {
 }
 
 static void test_iny_without_page_cross(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -180,7 +180,7 @@ static void test_iny_without_page_cross(void) {
 }
 
 static void test_iny_with_page_cross(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -195,7 +195,7 @@ static void test_iny_with_page_cross(void) {
 }
 
 static void test_load_store_zero_page(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -217,7 +217,7 @@ static void test_load_store_zero_page(void) {
 }
 
 static void test_load_registers_and_transfers(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -239,7 +239,7 @@ static void test_load_registers_and_transfers(void) {
 }
 
 static void test_adc_flags(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -255,7 +255,7 @@ static void test_adc_flags(void) {
 }
 
 static void test_adc_carry_and_zero(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -271,7 +271,7 @@ static void test_adc_carry_and_zero(void) {
 }
 
 static void test_logic_and_compare(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -290,7 +290,7 @@ static void test_logic_and_compare(void) {
 }
 
 static void test_inc_zero_page(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -304,7 +304,7 @@ static void test_inc_zero_page(void) {
 }
 
 static void test_pha_pla_round_trip(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -326,7 +326,7 @@ static void test_pha_pla_round_trip(void) {
 }
 
 static void test_jmp_absolute(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -339,7 +339,7 @@ static void test_jmp_absolute(void) {
 }
 
 static void test_jsr_rts_round_trip(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 
@@ -358,7 +358,7 @@ static void test_jsr_rts_round_trip(void) {
 }
 
 static void test_branch_backward_taken(void) {
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     setup(&bus, &cpu, 0x0080);
 

@@ -1,4 +1,4 @@
-#include "bus.h"
+#include "system2600.h"
 #include "cpu6502.h"
 #include "tia.h"
 #include "cartridge.h"
@@ -6,36 +6,36 @@
 #include <stdlib.h>
 
 static uint8_t cpu_bus_read(void *context, uint16_t address) {
-    return bus_read(context, address);
+    return system2600_read(context, address);
 }
 
 static void cpu_bus_write(void *context, uint16_t address, uint8_t value) {
-    bus_write(context, address, value);
+    system2600_write(context, address, value);
 }
 
 static void cpu_bus_tick(void *context, int cycles) {
-    bus_tick(context, cycles);
+    system2600_tick(context, cycles);
 }
 
 static void cpu_bus_reset_cycles(void *context) {
-    bus_reset_cycles_this_step(context);
+    system2600_reset_cycles_this_step(context);
 }
 
 static int cpu_bus_get_cycles(void *context) {
-    return bus_get_cycles_this_step(context);
+    return system2600_get_cycles_this_step(context);
 }
 
 static void cpu_bus_jsr(void *context, uint8_t target_high) {
-    Bus *bus = context;
+    System2600 *bus = context;
     cart_fe_on_byte(bus->cart, target_high);
 }
 
 static void cpu_bus_rts(void *context, uint8_t return_high) {
-    Bus *bus = context;
+    System2600 *bus = context;
     cart_fe_on_rts_hi(bus->cart, return_high);
 }
 
-void cpu_init(CPU6502 *cpu, Bus *bus) {
+CpuBus system2600_cpu_bus(System2600 *bus) {
     if (!bus) {
         fprintf(stderr, "CPU initialization requires an Atari 2600 bus\n");
         abort();
@@ -50,11 +50,11 @@ void cpu_init(CPU6502 *cpu, Bus *bus) {
         .on_jsr = cpu_bus_jsr,
         .on_rts = cpu_bus_rts,
     };
-    cpu_init_with_bus(cpu, interface);
+    return interface;
 }
 
-void bus_init(
-    Bus *bus,
+void system2600_init(
+    System2600 *bus,
     TIA *tia,
     RIOT *riot,
     Cartridge *cart,
@@ -76,7 +76,7 @@ void bus_init(
     }
 }
 
-void bus_tick(Bus *bus, int cycles) {
+void system2600_tick(System2600 *bus, int cycles) {
     if (!bus || cycles <= 0) {
         return;
     }
@@ -91,7 +91,7 @@ void bus_tick(Bus *bus, int cycles) {
     cart_step_cycles(bus->cart, cycles);
 }
 
-uint8_t bus_read(Bus *bus, uint16_t address) {
+uint8_t system2600_read(System2600 *bus, uint16_t address) {
     if (!bus) {
         return 0xFFu;
     }
@@ -103,13 +103,13 @@ uint8_t bus_read(Bus *bus, uint16_t address) {
     /* FE-cartridges gebruiken dit bereik voor RAM. */
     if (cart != NULL && addr >= 0x0100u && addr <= 0x01FFu &&
         cart->type == CART_TYPE_FE) {
-        bus_tick(bus, 1);
+        system2600_tick(bus, 1);
         value = bus->ram[addr & 0x007Fu];
     } else if (addr & 0x1000u) {
-        bus_tick(bus, 1);
+        system2600_tick(bus, 1);
         value = cart ? cart_read(cart, addr, bus->data_bus) : 0xFFu;
     } else {
-        bus_tick(bus, 1);
+        system2600_tick(bus, 1);
         if ((addr & 0x0280u) == 0x0280u) {
             value = bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
         } else if ((addr & 0x0280u) == 0x0080u) {
@@ -124,8 +124,8 @@ uint8_t bus_read(Bus *bus, uint16_t address) {
     return value;
 }
 
-void bus_write(Bus *bus, uint16_t address, uint8_t value) {
-    bus_tick(bus, 1);
+void system2600_write(System2600 *bus, uint16_t address, uint8_t value) {
+    system2600_tick(bus, 1);
     bus->data_bus = value;
 
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
@@ -157,15 +157,15 @@ void bus_write(Bus *bus, uint16_t address, uint8_t value) {
     }
 }
 
-int bus_get_cycles_this_step(const Bus *bus) {
+int system2600_get_cycles_this_step(const System2600 *bus) {
     return bus->cycles_this_step;
 }
 
-void bus_reset_cycles_this_step(Bus *bus) {
+void system2600_reset_cycles_this_step(System2600 *bus) {
     bus->cycles_this_step = 0;
 }
 
-bool bus_step_frame(Bus *bus, CPU6502 *cpu) {
+bool system2600_step_frame(System2600 *bus, CPU6502 *cpu) {
     if (!bus || !bus->tia || !cpu) {
         return false;
     }
@@ -173,7 +173,7 @@ bool bus_step_frame(Bus *bus, CPU6502 *cpu) {
     bus->tia->frame_ready = false;
 
     while (!bus->tia->frame_ready) {
-        if (bus->tia->scanline >= BUS_MAX_FRAME_SCANLINES) {
+        if (bus->tia->scanline >= SYSTEM2600_MAX_FRAME_SCANLINES) {
             return false;
         }
         if (bus->tia->wsync) {

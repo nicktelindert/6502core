@@ -10,10 +10,14 @@
 #include "tia.h"
 #include "riot.h"
 #include "cartridge.h"
-#include "bus.h"
+#include "system2600.h"
 #include "cpu6502.h"
 #include "audio.h"
 #include "rom_browser.h"
+#include "system5200.h"
+#include "antic5200.h"
+#include "gtia5200.h"
+#include "pokey5200.h"
 
 
 typedef struct {
@@ -21,17 +25,27 @@ typedef struct {
     TIA tia;
     RIOT riot;
     Cartridge cart;
-    Bus bus;
+    System2600 system2600;
     CPU6502 cpu;
     bool loaded;
     VideoStandard standard;
+    bool is_5200;
+    bool warned_5200;
+    System5200 system5200;
+    Antic5200 antic5200;
+    GTIA5200 gtia5200;
+    Pokey5200 pokey5200;
+    char load_error[256];
 } Emulator;
 
 typedef struct {
     bool show_help;
     bool show_rom_menu;
     bool selecting_folder;
+    bool selecting_bios;
     char rom_dir[ROM_PATH_MAX];
+    char bios_path[ROM_PATH_MAX];
+    uint32_t bios_notice_until;
     RomBrowser browser;
     size_t selected_rom_idx;
     char browser_error[256];
@@ -168,8 +182,10 @@ static void emu_destroy(Emulator *emu) {
         return;
     }
     if (emu->loaded) {
-        cart_free(&emu->cart);
-        tia_destroy(&emu->tia);
+        if (!emu->is_5200) {
+            cart_free(&emu->cart);
+            tia_destroy(&emu->tia);
+        }
         emu->loaded = false;
     }
 }
@@ -196,7 +212,86 @@ static void emu_set_video_standard(Emulator *emu, VideoStandard standard) {
     cart_set_video_standard(&emu->cart, standard);
 }
 
+static bool is_5200_rom(const char *path) {
+    const char *base = strrchr(path, '/');
+    const char *ext = strrchr(base ? base + 1 : path, '.');
+    return ext && ext[1] && ext[2] && ext[3] && !ext[4] &&
+           tolower((unsigned char)ext[1]) == 'a' && ext[2] == '5' && ext[3] == '2';
+}
+
+static bool emu_load_5200(Emulator *emu, const char *path) {
+    char bios_path[ROM_PATH_MAX];
+    char error[256] = {0};
+    RomConfigResult config = bios_config_load(bios_path, sizeof(bios_path), error, sizeof(error));
+    if (config != ROM_CONFIG_OK) {
+        snprintf(emu->load_error, sizeof(emu->load_error), "%s",
+                 config == ROM_CONFIG_MISSING ? "Select a 5200 BIOS with F6 first" : error);
+        fprintf(stderr, "%s\n", emu->load_error);
+        return false;
+    }
+    System5200 candidate;
+    system5200_init(&candidate);
+    if (!system5200_load_bios_file(&candidate, bios_path, error, sizeof(error))) {
+        snprintf(emu->load_error, sizeof(emu->load_error), "5200 BIOS: %.230s", error);
+        fprintf(stderr, "%s\n", emu->load_error);
+        return false;
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        snprintf(emu->load_error, sizeof(emu->load_error), "Unable to open 5200 ROM");
+        fprintf(stderr, "%s: %s\n", emu->load_error, path);
+        return false;
+    }
+    uint8_t bytes[0x8001];
+    size_t size = fread(bytes, 1, sizeof(bytes), f);
+    bool read_error = ferror(f) != 0;
+    int close_result = fclose(f);
+    if (read_error || close_result != 0) {
+        snprintf(emu->load_error, sizeof(emu->load_error), "Unable to read 5200 ROM");
+        fprintf(stderr, "%s\n", emu->load_error);
+        return false;
+    }
+    System5200CartType type;
+    switch (size) {
+        case 0x1000: type = SYSTEM5200_CART_4K; break;
+        case 0x2000: type = SYSTEM5200_CART_8K; break;
+        case 0x4000: type = SYSTEM5200_CART_16K; break;
+        case 0x8000: type = SYSTEM5200_CART_32K; break;
+        default:
+            snprintf(emu->load_error, sizeof(emu->load_error), "Unsupported 5200 ROM size");
+            fprintf(stderr, "%s: %zu bytes\n", emu->load_error, size);
+            return false;
+    }
+    if (!system5200_load_cartridge(&candidate, type, bytes, size)) {
+        snprintf(emu->load_error, sizeof(emu->load_error), "Unable to load 5200 cartridge");
+        return false;
+    }
+    emu_destroy(emu);
+    emu->system5200 = candidate;
+    antic5200_init(&emu->antic5200);
+    gtia5200_init(&emu->gtia5200);
+    pokey5200_init(&emu->pokey5200);
+    pokey5200_capture_audio(&emu->pokey5200, true);
+    pokey5200_set_pot(&emu->pokey5200, 0, 114);
+    pokey5200_set_pot(&emu->pokey5200, 1, 114);
+    system5200_attach_antic(&emu->system5200, &emu->antic5200, &emu->cpu);
+    system5200_attach_gtia(&emu->system5200, &emu->gtia5200);
+    system5200_attach_pokey(&emu->system5200, &emu->pokey5200);
+    cpu_init_with_bus(&emu->cpu, system5200_cpu_bus(&emu->system5200));
+    tia_set_video_standard(&emu->tia, VIDEO_NTSC);
+    emu->standard = VIDEO_NTSC;
+    emu->is_5200 = true;
+    emu->warned_5200 = false;
+    emu->loaded = true;
+    if (size == 0x4000)
+        fprintf(stderr, "5200: using standard 16K layout; EE layout is not selected automatically\n");
+    printf("Loaded experimental 5200 ROM: %s\n", path);
+    return true;
+}
+
 static bool emu_load_rom(Emulator *emu, const char *path) {
+    emu->load_error[0] = '\0';
+    if (is_5200_rom(path)) return emu_load_5200(emu, path);
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "Unable to open rom: %s\n", path);
@@ -228,6 +323,7 @@ static bool emu_load_rom(Emulator *emu, const char *path) {
     }
 
     emu_destroy(emu);
+    emu->is_5200 = false;
 
     const char *base = strrchr(path, '/');
 #ifdef _WIN32
@@ -248,8 +344,8 @@ static bool emu_load_rom(Emulator *emu, const char *path) {
     tia_init(&emu->tia, &emu->audio);
     emu_set_video_standard(emu, video_standard_from_filename(base));
     riot_init(&emu->riot);
-    bus_init(&emu->bus, &emu->tia, &emu->riot, &emu->cart, tia_step, tia_read, tia_write);
-    cpu_init(&emu->cpu, &emu->bus);
+    system2600_init(&emu->system2600, &emu->tia, &emu->riot, &emu->cart, tia_step, tia_read, tia_write);
+    cpu_init_with_bus(&emu->cpu, system2600_cpu_bus(&emu->system2600));
     emu->loaded = true;
 
     printf("Geladen: %s [%s]\n", emu->cart.name,
@@ -257,17 +353,52 @@ static bool emu_load_rom(Emulator *emu, const char *path) {
     return true;
 }
 
-static bool overlay_open_browser(OverlayState *ov, const char *path, bool selecting_folder) {
+static bool emu_step_5200_frame(Emulator *emu) {
+    uint64_t deadline = emu->system5200.elapsed_cycles + 114u * 263u;
+    bool reached_end = false;
+    while (emu->system5200.elapsed_cycles < deadline) {
+        cpu_step(&emu->cpu);
+        if (emu->antic5200.unsupported) {
+            fprintf(stderr, "5200: unsupported ANTIC operation; emulation paused\n");
+            emu->warned_5200 = true;
+            return true;
+        }
+        if (emu->antic5200.scanline >= 248) reached_end = true;
+        if (reached_end && emu->antic5200.scanline == 0) return true;
+    }
+    fprintf(stderr, "5200 video frame did not finish\n");
+    return false;
+}
+
+static bool overlay_open_filtered(OverlayState *ov, const char *path, BrowserFilter filter) {
     ov->show_help = false;
     ov->show_rom_menu = true;
     ov->browser_error[0] = '\0';
-    if (!rom_browser_open(&ov->browser, path, selecting_folder,
-                          ov->browser_error, sizeof(ov->browser_error))) {
+    if (!rom_browser_open_filtered(&ov->browser, path, filter, ov->browser_error, sizeof(ov->browser_error))) {
         fprintf(stderr, "%s\n", ov->browser_error);
         return false;
     }
-    ov->selecting_folder = selecting_folder;
+    ov->selecting_folder = filter == BROWSER_DIRECTORIES;
+    ov->selecting_bios = filter == BROWSER_ALL_FILES;
     ov->selected_rom_idx = 0;
+    return true;
+}
+
+static bool overlay_open_browser(OverlayState *ov, const char *path, bool selecting_folder) {
+    return overlay_open_filtered(ov, path, selecting_folder ? BROWSER_DIRECTORIES : BROWSER_ROMS);
+}
+
+static bool overlay_select_bios(OverlayState *ov, const char *path) {
+    System5200 system;
+    system5200_init(&system);
+    if (!system5200_load_bios_file(&system, path, ov->browser_error, sizeof(ov->browser_error)) ||
+        !bios_config_save(path, ov->browser_error, sizeof(ov->browser_error))) {
+        fprintf(stderr, "%s\n", ov->browser_error);
+        return false;
+    }
+    snprintf(ov->bios_path, sizeof(ov->bios_path), "%s", path);
+    ov->show_rom_menu = false;
+    ov->bios_notice_until = SDL_GetTicks() + 5000;
     return true;
 }
 
@@ -300,7 +431,9 @@ static bool overlay_browser_key(OverlayState *ov, SDL_Keycode key, char *rom_pat
             return false;
         }
         if (parent || browser->entries[ov->selected_rom_idx].is_dir) {
-            overlay_open_browser(ov, path, ov->selecting_folder);
+            BrowserFilter filter = ov->selecting_folder ? BROWSER_DIRECTORIES :
+                                   ov->selecting_bios ? BROWSER_ALL_FILES : BROWSER_ROMS;
+            overlay_open_filtered(ov, path, filter);
         } else if (snprintf(rom_path, path_size, "%s", path) >= (int)path_size) {
             snprintf(ov->browser_error, sizeof(ov->browser_error), "Path is too long");
         } else {
@@ -317,12 +450,18 @@ static void overlay_draw_fps(SDL_Renderer *renderer, double fps, int win_w, Vide
     draw_text(renderer, win_w - 220, 25, buf, green, 2);
 }
 
-static void overlay_draw_help(OverlayState *ov, SDL_Renderer *renderer, int win_w) {
+static void overlay_draw_help(OverlayState *ov, SDL_Renderer *renderer, int win_w, bool is_5200) {
     SDL_Color green = { 0, 255, 120, 255 };
 
-    draw_overlay_box(renderer, 15, 15, win_w - 30, 70, 225);
-    draw_text(renderer, 25, 25, "F1: Help F2: ROMs F3: Frame limit F4: PAL/NTSC F5: ROM folder", green, 2);
-    draw_text(renderer, 25, 55, "ASWD: Movement CTRL/SHIFT: Fire/Reset", green, 2);
+    draw_overlay_box(renderer, 15, 15, win_w - 30, is_5200 ? 145 : 95, 225);
+    draw_text(renderer, 25, 25, "F1: Help F2: ROMs F3: Frame limit F4: PAL/NTSC", green, 2);
+    draw_text(renderer, 25, 50, "F5: ROM folder F6: 5200 BIOS", green, 2);
+    draw_text(renderer, 25, 75, is_5200 ? "WASD/ARROWS: Move  CTRL: Fire  SPACE: Top fire" :
+              "ASWD: Movement CTRL/SHIFT: Fire/Reset", green, 2);
+    if (is_5200) {
+        draw_text(renderer, 25, 100, "ENTER: Start  P: Pause  R: Reset", green, 2);
+        draw_text(renderer, 25, 125, "0-9, NUMPAD */: Keypad *#", green, 2);
+    }
 
 
 
@@ -336,7 +475,8 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     SDL_Color yellow = { 255, 255, 100, 255 };
     SDL_Color warn = { 255, 200, 0, 255 };
     draw_overlay_box(renderer, 15, 15, win_w - 30, win_h - 30, 225);
-    draw_text(renderer, 25, 25, ov->selecting_folder ? "Select ROM folder" : "Select ROM", green, 2);
+    draw_text(renderer, 25, 25, ov->selecting_folder ? "Select ROM folder" :
+              ov->selecting_bios ? "Select 5200 BIOS file" : "Select ROM", green, 2);
     size_t visible = win_w > 50 ? (size_t)(win_w - 50) / 12 : 1;
     const char *dir = ov->browser.dir;
     size_t len = strlen(dir);
@@ -369,16 +509,55 @@ static void overlay_draw_rom_menu(OverlayState *ov, SDL_Renderer *renderer, int 
     }
 }
 
-static void overlay_render(OverlayState *ov, SDL_Renderer *renderer, int win_w, int win_h, double fps, VideoStandard standard) {
+static void overlay_render(OverlayState *ov, SDL_Renderer *renderer, int win_w, int win_h, double fps, VideoStandard standard, bool is_5200) {
     if (ov->show_rom_menu) {
         overlay_draw_rom_menu(ov, renderer, win_w, win_h);
     } else if (ov->show_help) {
-        overlay_draw_help(ov, renderer, win_w);
+        overlay_draw_help(ov, renderer, win_w, is_5200);
     }
 
     if (ov->show_help == false && ov->show_rom_menu == false) {
         overlay_draw_fps(renderer, fps, win_w, standard);
     }
+    if (ov->bios_notice_until && (int32_t)(ov->bios_notice_until - SDL_GetTicks()) > 0) {
+        SDL_Color green = { 0, 255, 120, 255 };
+        draw_overlay_box(renderer, 15, 85, 400, 35, 225);
+        draw_text(renderer, 25, 95, "5200 BIOS saved", green, 2);
+    }
+}
+
+static void handle_5200_input(Emulator *emu, const uint8_t *keys, bool active) {
+    bool left = active && (keys[SDL_SCANCODE_A] || keys[SDL_SCANCODE_LEFT]);
+    bool right = active && (keys[SDL_SCANCODE_D] || keys[SDL_SCANCODE_RIGHT]);
+    bool up = active && (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]);
+    bool down = active && (keys[SDL_SCANCODE_S] || keys[SDL_SCANCODE_DOWN]);
+    unsigned x = left == right ? 114 : left ? 6 : 220;
+    unsigned y = up == down ? 114 : up ? 6 : 220;
+    pokey5200_set_pot(&emu->pokey5200, 0, x);
+    pokey5200_set_pot(&emu->pokey5200, 1, y);
+    gtia5200_set_trigger(&emu->gtia5200, 0, active &&
+                         (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]));
+    static const struct { SDL_Scancode key; uint8_t code; } keypad[] = {
+        {SDL_SCANCODE_1, 15}, {SDL_SCANCODE_2, 14}, {SDL_SCANCODE_3, 13},
+        {SDL_SCANCODE_4, 11}, {SDL_SCANCODE_5, 10}, {SDL_SCANCODE_6, 9},
+        {SDL_SCANCODE_7, 7}, {SDL_SCANCODE_8, 6}, {SDL_SCANCODE_9, 5},
+        {SDL_SCANCODE_0, 2}, {SDL_SCANCODE_KP_MULTIPLY, 3}, {SDL_SCANCODE_KP_DIVIDE, 1},
+        {SDL_SCANCODE_KP_1, 15}, {SDL_SCANCODE_KP_2, 14}, {SDL_SCANCODE_KP_3, 13},
+        {SDL_SCANCODE_KP_4, 11}, {SDL_SCANCODE_KP_5, 10}, {SDL_SCANCODE_KP_6, 9},
+        {SDL_SCANCODE_KP_7, 7}, {SDL_SCANCODE_KP_8, 6}, {SDL_SCANCODE_KP_9, 5},
+        {SDL_SCANCODE_KP_0, 2}, {SDL_SCANCODE_RETURN, 12}, {SDL_SCANCODE_KP_ENTER, 12},
+        {SDL_SCANCODE_P, 8}, {SDL_SCANCODE_R, 4}
+    };
+    uint16_t buttons = 0;
+    if (active) {
+        for (unsigned i = 0; i < sizeof(keypad) / sizeof(keypad[0]); i++)
+            if (keys[keypad[i].key]) buttons |= (uint16_t)(1u << keypad[i].code);
+        if (keys[SDL_SCANCODE_8] && (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]))
+            buttons = (uint16_t)((buttons & ~(1u << 6)) | (1u << 3));
+        if (keys[SDL_SCANCODE_3] && (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]))
+            buttons = (uint16_t)((buttons & ~(1u << 13)) | (1u << 1));
+    }
+    pokey5200_set_controller(&emu->pokey5200, 0, buttons, active && keys[SDL_SCANCODE_SPACE]);
 }
 
 
@@ -487,6 +666,17 @@ int main(int argc, char **argv) {
         SDL_Quit();
         return 1;
     }
+    SDL_Texture *texture5200 = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
+                                                SDL_TEXTUREACCESS_STREAMING,
+                                                GTIA5200_WIDTH, GTIA5200_HEIGHT);
+    if (!texture5200) {
+        fprintf(stderr, "SDL 5200 texture failed: %s\n", SDL_GetError());
+        SDL_DestroyTexture(texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
     int texture_height = TIA_FB_HEIGHT;
     int display_height = TIA_FB_HEIGHT;
 
@@ -501,6 +691,8 @@ int main(int argc, char **argv) {
     uint32_t max_queued_bytes  = 0;
     if (audio_dev > 0) {
         SDL_PauseAudioDevice(audio_dev, 0);
+    } else {
+        fprintf(stderr, "Audio device unavailable: %s\n", SDL_GetError());
     }
 
     Emulator emu;
@@ -533,6 +725,13 @@ int main(int argc, char **argv) {
             snprintf(overlay.browser_error, sizeof(overlay.browser_error), "%s", config_error);
         }
     }
+    config_error[0] = '\0';
+    RomConfigResult bios_result = bios_config_load(overlay.bios_path, sizeof(overlay.bios_path),
+                                                    config_error, sizeof(config_error));
+    if (bios_result == ROM_CONFIG_ERROR) {
+        fprintf(stderr, "5200 BIOS config: %s\n", config_error);
+        overlay.bios_path[0] = '\0';
+    }
     
     while (running) {
         uint64_t frame_start = SDL_GetPerformanceCounter();
@@ -543,7 +742,7 @@ int main(int argc, char **argv) {
             if (ev.type == SDL_KEYDOWN) {
                 SDL_Keycode key = ev.key.keysym.sym;
 
-                if (key == SDLK_F4 && !ev.key.repeat && emu.loaded) {
+                if (key == SDLK_F4 && !ev.key.repeat && emu.loaded && !emu.is_5200) {
                     emu_set_video_standard(&emu, emu.standard == VIDEO_NTSC ? VIDEO_PAL : VIDEO_NTSC);
                     pacer.deadline = 0.0;
                     if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
@@ -556,19 +755,33 @@ int main(int argc, char **argv) {
                     uncapped = false;
                 }
                 if (key == SDLK_F3) pacer.deadline = 0.0;
-                if (key == SDLK_F5 && !ev.key.repeat) {
+                if (key == SDLK_F6 && !ev.key.repeat) {
+                    char dir[ROM_PATH_MAX];
+                    snprintf(dir, sizeof(dir), "%s", overlay.bios_path);
+                    char *slash = strrchr(dir, '/');
+                    if (slash) {
+                        if (slash == dir) slash[1] = '\0'; else *slash = '\0';
+                    } else {
+                        snprintf(dir, sizeof(dir), "%s", overlay.rom_dir[0] ? overlay.rom_dir : "/");
+                    }
+                    if (!overlay_open_filtered(&overlay, dir, BROWSER_ALL_FILES) && strcmp(dir, "/") != 0)
+                        overlay_open_filtered(&overlay, "/", BROWSER_ALL_FILES);
+                } else if (key == SDLK_F5 && !ev.key.repeat) {
                     const char *dir = overlay.rom_dir[0] ? overlay.rom_dir : overlay.browser.dir;
                     if (!dir[0]) dir = "/";
                     overlay_open_browser(&overlay, dir, true);
                 } else if (overlay.show_rom_menu) {
                     char rom_path[ROM_PATH_MAX];
                     if (overlay_browser_key(&overlay, key, rom_path, sizeof(rom_path))) {
-                        if (emu_load_rom(&emu, rom_path)) {
+                        if (overlay.selecting_bios) {
+                            overlay_select_bios(&overlay, rom_path);
+                        } else if (emu_load_rom(&emu, rom_path)) {
                             pacer.deadline = 0.0;
                             if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
                             overlay.show_rom_menu = false;
                         } else {
-                            snprintf(overlay.browser_error, sizeof(overlay.browser_error), "Unable to load ROM");
+                            snprintf(overlay.browser_error, sizeof(overlay.browser_error), "%s",
+                                     emu.load_error[0] ? emu.load_error : "Unable to load ROM");
                             fprintf(stderr, "Unable to load ROM: %s\n", rom_path);
                         }
                     }
@@ -597,9 +810,23 @@ int main(int argc, char **argv) {
         }
 
 
-        if (emu.loaded) {
+        if (emu.loaded && emu.is_5200) {
+            handle_5200_input(&emu, SDL_GetKeyboardState(NULL),
+                              !overlay.show_rom_menu && !overlay.show_help &&
+                              (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS));
+            if (!emu.warned_5200 && !emu_step_5200_frame(&emu)) {
+                emu_destroy(&emu);
+                continue;
+            }
+            uint8_t rgb[GTIA5200_HEIGHT][GTIA5200_WIDTH][3];
+            for (unsigned y = 0; y < GTIA5200_HEIGHT; y++)
+                for (unsigned x = 0; x < GTIA5200_WIDTH; x++)
+                    memcpy(rgb[y][x], emu.tia.color_lut[emu.gtia5200.framebuffer[y][x]], 3);
+            if (SDL_UpdateTexture(texture5200, NULL, rgb, GTIA5200_WIDTH * 3) != 0)
+                fprintf(stderr, "5200 texture update failed: %s\n", SDL_GetError());
+        } else if (emu.loaded) {
             handle_input(&emu, !overlay.show_rom_menu);
-            if (!bus_step_frame(&emu.bus, &emu.cpu)) {
+            if (!system2600_step_frame(&emu.system2600, &emu.cpu)) {
                 fprintf(stderr, "Frame synchronization failed for %s (PC=%04X, scanline=%d)\n",
                         emu.cart.name, emu.cpu.PC, emu.tia.scanline);
                 emu_destroy(&emu);
@@ -637,25 +864,6 @@ int main(int argc, char **argv) {
                 }
             }
 
-            if (audio_dev > 0) {
-                max_queued_bytes = (uint32_t)(((double)have.freq /
-                    video_frame_rate(emu.standard)) * 3.0 * sizeof(int16_t) * have.channels);
-                size_t n = tia_audio_take_samples(&emu.audio, audio_tmp, 4096);
-                if (n > 0) {
-                    uint32_t bytes_to_queue = (uint32_t)(n * sizeof(int16_t));
-                    uint32_t queued = SDL_GetQueuedAudioSize(audio_dev);
-
-                    if (queued > max_queued_bytes) {
-                        SDL_ClearQueuedAudio(audio_dev);
-                        queued = 0;
-                    }
-
-                    if (queued + bytes_to_queue <= max_queued_bytes) {
-                        SDL_QueueAudio(audio_dev, audio_tmp, bytes_to_queue);
-                    }
-                }
-            }
-
         } else {
             /* Leeg/donker scherm zolang er nog geen ROM actief is */
             uint8_t blank[TIA_FB_SIZE];
@@ -665,6 +873,24 @@ int main(int argc, char **argv) {
        
       
 
+        if (emu.loaded && (emu.is_5200 || audio_dev > 0)) {
+            size_t n = emu.is_5200 ?
+                pokey5200_take_samples(&emu.pokey5200, audio_tmp, 4096) :
+                tia_audio_take_samples(&emu.audio, audio_tmp, 4096);
+            if (audio_dev > 0 && n > 0) {
+                max_queued_bytes = (uint32_t)(((double)have.freq /
+                    video_frame_rate(emu.standard)) * 3.0 * sizeof(int16_t) * have.channels);
+                uint32_t bytes = (uint32_t)(n * sizeof(int16_t));
+                uint32_t queued = SDL_GetQueuedAudioSize(audio_dev);
+                if (queued > max_queued_bytes) {
+                    SDL_ClearQueuedAudio(audio_dev);
+                    queued = 0;
+                }
+                if (queued + bytes <= max_queued_bytes &&
+                    SDL_QueueAudio(audio_dev, audio_tmp, bytes) != 0)
+                    fprintf(stderr, "Audio queue failed: %s\n", SDL_GetError());
+            }
+        }
         SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
 
         int src_height = display_height;
@@ -672,16 +898,24 @@ int main(int argc, char **argv) {
             src_height = texture_height;
         }
 
-        SDL_Rect src_rect = {0, 0, TIA_FB_WIDTH, src_height};
+        SDL_Rect src_rect = emu.loaded && emu.is_5200 ?
+            (SDL_Rect){0, 0, GTIA5200_WIDTH, GTIA5200_HEIGHT} :
+            (SDL_Rect){0, 0, TIA_FB_WIDTH, src_height};
         SDL_Rect dst_rect = {0, 0, win_w, win_h};
 
         SDL_RenderClear(renderer);
         if (src_height > 0 &&
-            SDL_RenderCopy(renderer, texture, &src_rect, &dst_rect) < 0) {
+            SDL_RenderCopy(renderer, emu.loaded && emu.is_5200 ? texture5200 : texture, &src_rect, &dst_rect) < 0) {
             fprintf(stderr, "SDL_RenderCopy fout: %s\n", SDL_GetError());
         }
 
-        overlay_render(&overlay, renderer, win_w, win_h, current_fps, emu.standard);
+        overlay_render(&overlay, renderer, win_w, win_h, current_fps, emu.standard, emu.loaded && emu.is_5200);
+        if (emu.loaded && emu.is_5200 && !overlay.show_rom_menu && !overlay.show_help) {
+            SDL_Color yellow = {255, 255, 100, 255};
+            draw_text(renderer, 20, 20, emu.warned_5200 ?
+                      "5200 PAUSED - VIDEO NOT SUPPORTED" : "5200 SUPPORT IS STILL EXPERIMENTAL",
+                      yellow, 1);
+        }
         SDL_RenderPresent(renderer);
         if (!uncapped) {
             frame_pacer_wait(&pacer, frame_start, perf_freq, video_frame_rate(emu.standard));
@@ -706,6 +940,7 @@ int main(int argc, char **argv) {
         SDL_CloseAudioDevice(audio_dev);
     }
     emu_destroy(&emu);
+    SDL_DestroyTexture(texture5200);
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

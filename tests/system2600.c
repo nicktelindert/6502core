@@ -1,4 +1,4 @@
-#include "../bus.h"
+#include "../system2600.h"
 #include "../cpu6502.h"
 #include "../tia.h"
 #include <stdio.h>
@@ -48,12 +48,12 @@ static void spy_cart_write(Cartridge *cart, uint16_t address, uint8_t value) {
 static void test_address_decode(void) {
     TIA tia = {0};
     RIOT riot;
-    Bus bus;
+    System2600 bus;
     Cartridge cart = {0};
     cart.type = CART_TYPE_4K;
     cart.read = spy_cart_read;
     cart.write = spy_cart_write;
-    bus_init(&bus, &tia, &riot, &cart, NULL, spy_tia_read, spy_tia_write);
+    system2600_init(&bus, &tia, &riot, &cart, NULL, spy_tia_read, spy_tia_write);
 
     for (unsigned address = 0; address <= 0xFFFF; address++) {
         unsigned physical = address & 0x1FFF;
@@ -70,9 +70,9 @@ static void test_address_decode(void) {
         static const uint8_t riot_values[] = {0x12, 0x34, 0x56, 0x78, 0x5C, 0, 0x5C, 0};
         bus.ram[physical & 0x7F] = 0x9B;
         tia_reads = cart_reads = tia_writes = cart_writes = 0;
-        bus_reset_cycles_this_step(&bus);
-        uint8_t value = bus_read(&bus, (uint16_t)address);
-        CHECK(bus_get_cycles_this_step(&bus) == 1);
+        system2600_reset_cycles_this_step(&bus);
+        uint8_t value = system2600_read(&bus, (uint16_t)address);
+        CHECK(system2600_get_cycles_this_step(&bus) == 1);
         CHECK(tia_reads == is_tia && cart_reads == is_cart);
         CHECK(value == (is_cart ? 0xC5 : is_tia ? 0xA6 :
                         is_ram ? 0x9B : riot_values[physical & 7]));
@@ -83,9 +83,9 @@ static void test_address_decode(void) {
         riot.timer = 0x5C;
         riot.interval = 1024;
         bus.ram[physical & 0x7F] = 0x9B;
-        bus_reset_cycles_this_step(&bus);
-        bus_write(&bus, (uint16_t)address, 0x6D);
-        CHECK(bus_get_cycles_this_step(&bus) == 1);
+        system2600_reset_cycles_this_step(&bus);
+        system2600_write(&bus, (uint16_t)address, 0x6D);
+        CHECK(system2600_get_cycles_this_step(&bus) == 1);
         CHECK(tia_writes == is_tia && cart_writes == is_cart);
         CHECK(bus.data_bus == 0x6D);
         CHECK(bus.ram[physical & 0x7F] == (is_ram ? 0x6D : 0x9B));
@@ -113,14 +113,14 @@ static void test_synthetic_cartridge_program(void) {
     Cartridge cart;
     TIA tia = {0};
     RIOT riot;
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "system test"));
     CHECK(cart.type == CART_TYPE_4K);
     tia_init(&tia, NULL);
     riot_init(&riot);
-    bus_init(&bus, &tia, &riot, &cart, tia_step, tia_read, tia_write);
-    cpu_init(&cpu, &bus);
+    system2600_init(&bus, &tia, &riot, &cart, tia_step, tia_read, tia_write);
+    cpu_init_with_bus(&cpu, system2600_cpu_bus(&bus));
     CHECK(cpu.PC == 0xF100 && tia.clock == 6);
     static const int cycles[] = {2, 3, 5, 3, 3, 4, 4};
     for (size_t i = 0; i < sizeof(cycles) / sizeof(cycles[0]); i++) {
@@ -156,20 +156,20 @@ static void test_wsync_system_stall(void) {
     Cartridge cart;
     TIA tia = {0};
     RIOT riot;
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "wsync test"));
     tia_init(&tia, NULL);
     riot_init(&riot);
-    bus_init(&bus, &tia, &riot, &cart, tia_step, tia_read, observe_tia_write);
-    cpu_init(&cpu, &bus);
+    system2600_init(&bus, &tia, &riot, &cart, tia_step, tia_read, observe_tia_write);
+    cpu_init_with_bus(&cpu, system2600_cpu_bus(&bus));
     tia_step(&tia, 24);
     CHECK(tia.clock == 30);
     tia_write(&tia, 0x02, 0);
     riot_write(&riot, 0x294, 200);
     observed_riot = &riot;
     vsync_clock = vsync_scanline = vsync_timer = -1;
-    CHECK(bus_step_frame(&bus, &cpu));
+    CHECK(system2600_step_frame(&bus, &cpu));
     CHECK(vsync_scanline == 1);
     CHECK(vsync_clock == 15);
     CHECK(vsync_timer == 129);
@@ -181,21 +181,21 @@ static void test_wsync_system_stall(void) {
 static void test_missing_vsync_is_bounded(void) {
     TIA tia;
     RIOT riot;
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     tia_init(&tia, NULL);
     riot_init(&riot);
-    bus_init(&bus, &tia, &riot, NULL, tia_step, tia_read, tia_write);
-    cpu_init(&cpu, &bus);
+    system2600_init(&bus, &tia, &riot, NULL, tia_step, tia_read, tia_write);
+    cpu_init_with_bus(&cpu, system2600_cpu_bus(&bus));
     bus.ram[0] = 0x4C; /* JMP $0080 */
     bus.ram[1] = 0x80;
     bus.ram[2] = 0x00;
     cpu.PC = 0x0080;
-    tia.scanline = BUS_MAX_FRAME_SCANLINES - 1;
+    tia.scanline = SYSTEM2600_MAX_FRAME_SCANLINES - 1;
     tia.clock = 225;
-    CHECK(!bus_step_frame(&bus, &cpu));
+    CHECK(!system2600_step_frame(&bus, &cpu));
     CHECK(!tia.frame_ready);
-    CHECK(tia.scanline == BUS_MAX_FRAME_SCANLINES);
+    CHECK(tia.scanline == SYSTEM2600_MAX_FRAME_SCANLINES);
     tia_destroy(&tia);
 }
 

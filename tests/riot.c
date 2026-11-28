@@ -1,4 +1,4 @@
-#include "../bus.h"
+#include "../system2600.h"
 #include "../cpu6502.h"
 #include "../tia.h"
 #include <stdio.h>
@@ -107,33 +107,33 @@ static void test_timer_bus_phase(void) {
     static const int intervals[] = {1, 8, 64, 1024};
     for (int mode = 0; mode < 4; mode++) {
         RIOT riot;
-        Bus bus;
+        System2600 bus;
         riot_init(&riot);
-        bus_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
-        bus_write(&bus, (uint16_t)(0x294 + mode), 2);
+        system2600_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
+        system2600_write(&bus, (uint16_t)(0x294 + mode), 2);
         CHECK(riot.timer == 2);
-        CHECK(bus_read(&bus, 0x284) == 1);
+        CHECK(system2600_read(&bus, 0x284) == 1);
         if (intervals[mode] > 1) {
-            bus_tick(&bus, intervals[mode] - 1);
+            system2600_tick(&bus, intervals[mode] - 1);
         }
-        CHECK(bus_read(&bus, 0x286) == 0);
+        CHECK(system2600_read(&bus, 0x286) == 0);
     }
 }
 
 /* Training manual PDF pp. 3-5: 13-bit bus, RAM and 3 color clocks/cycle. */
 static void test_ram_mirrors(void) {
-    Bus bus;
+    System2600 bus;
     RIOT riot;
     riot_init(&riot);
-    bus_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
+    system2600_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
     for (int offset = 0; offset < 128; offset++) {
-        bus_write(&bus, (uint16_t)(0x80 + offset), (uint8_t)(offset ^ 0xA5));
+        system2600_write(&bus, (uint16_t)(0x80 + offset), (uint8_t)(offset ^ 0xA5));
     }
     for (int mirror = 0; mirror < 8; mirror++) {
         for (int offset = 0; offset < 128; offset++) {
             uint16_t base = (uint16_t)(mirror * 0x2000);
-            CHECK(bus_read(&bus, (uint16_t)(base + 0x80 + offset)) == (uint8_t)(offset ^ 0xA5));
-            CHECK(bus_read(&bus, (uint16_t)(base + 0x180 + offset)) == (uint8_t)(offset ^ 0xA5));
+            CHECK(system2600_read(&bus, (uint16_t)(base + 0x80 + offset)) == (uint8_t)(offset ^ 0xA5));
+            CHECK(system2600_read(&bus, (uint16_t)(base + 0x180 + offset)) == (uint8_t)(offset ^ 0xA5));
         }
     }
 }
@@ -141,13 +141,13 @@ static void test_ram_mirrors(void) {
 static void test_cpu_tia_riot_timing(void) {
     TIA tia;
     RIOT riot;
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     memset(&tia, 0, sizeof(tia));
     tia_init(&tia, NULL);
     riot_init(&riot);
-    bus_init(&bus, &tia, &riot, NULL, tia_step, tia_read, tia_write);
-    cpu_init(&cpu, &bus);
+    system2600_init(&bus, &tia, &riot, NULL, tia_step, tia_read, tia_write);
+    cpu_init_with_bus(&cpu, system2600_cpu_bus(&bus));
     tia.clock = 0;
     cpu.PC = 0x0080;
     bus.ram[0] = 0xA9; /* LDA #$02 */
@@ -181,13 +181,13 @@ static void test_intim_mirror_timing(void) {
                 uint16_t reg = (uint16_t)(0x284 + region * 0x2000 +
                                           mirror * 8 + alternate * 2);
                 RIOT riot;
-                Bus bus;
+                System2600 bus;
                 riot_init(&riot);
-                bus_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
-                bus_write(&bus, 0x294, 2);
-                CHECK(bus_read(&bus, reg) == 1);
+                system2600_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
+                system2600_write(&bus, 0x294, 2);
+                CHECK(system2600_read(&bus, reg) == 1);
                 CHECK(riot.timer == 1);
-                CHECK(bus_read(&bus, reg) == 0);
+                CHECK(system2600_read(&bus, reg) == 0);
                 CHECK(riot.timer == 0);
             }
         }
@@ -197,20 +197,20 @@ static void test_intim_mirror_timing(void) {
 static void test_cpu_timer_polling(void) {
     TIA tia;
     RIOT riot;
-    Bus bus;
+    System2600 bus;
     CPU6502 cpu;
     memset(&tia, 0, sizeof(tia));
     tia_init(&tia, NULL);
     riot_init(&riot);
-    bus_init(&bus, &tia, &riot, NULL, tia_step, tia_read, tia_write);
-    cpu_init(&cpu, &bus);
+    system2600_init(&bus, &tia, &riot, NULL, tia_step, tia_read, tia_write);
+    cpu_init_with_bus(&cpu, system2600_cpu_bus(&bus));
     bus.ram[0] = 0xAD; /* LDA $0284 */
     bus.ram[1] = 0x84;
     bus.ram[2] = 0x02;
     bus.ram[3] = 0xD0; /* BNE $0080 */
     bus.ram[4] = 0xFB;
     cpu.PC = 0x0080;
-    bus_write(&bus, 0x295, 2);
+    system2600_write(&bus, 0x295, 2);
     tia.clock = 0;
     for (int expected = 1; expected >= 0; expected--) {
         CHECK(cpu_step(&cpu) == 4);
@@ -248,10 +248,10 @@ static void test_riot_write_mirrors(void) {
                 uint16_t address = (uint16_t)(region * 0x2000u + 0x280u +
                                               mirror * 8u + reg);
                 RIOT riot;
-                Bus bus;
+                System2600 bus;
                 riot_init(&riot);
-                bus_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
-                bus_write(&bus, address, 0x5A);
+                system2600_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
+                system2600_write(&bus, address, 0x5A);
                 uint8_t actual[] = {riot.swcha, riot.swacnt, riot.swchb, riot.swbcnt};
                 CHECK(actual[reg] == 0x5A);
             }
@@ -261,12 +261,12 @@ static void test_riot_write_mirrors(void) {
                 uint16_t address = (uint16_t)(region * 0x2000u + 0x294u +
                                               mirror * 0x20u + mode);
                 RIOT riot;
-                Bus bus;
+                System2600 bus;
                 riot_init(&riot);
-                bus_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
-                bus_write(&bus, address, 0x42);
+                system2600_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
+                system2600_write(&bus, address, 0x42);
                 CHECK(riot.timer == 0x42 && riot.interval == intervals[mode]);
-                bus_write(&bus, (uint16_t)(address | 0x08u), 0x37);
+                system2600_write(&bus, (uint16_t)(address | 0x08u), 0x37);
                 CHECK(riot.timer == 0x37 && riot.interval == intervals[mode]);
             }
         }
