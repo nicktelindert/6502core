@@ -1,5 +1,6 @@
 #include "../bus.h"
 #include "../cpu6502.h"
+#include "../tia.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -199,6 +200,188 @@ static void test_f8_rom_banks(void) {
             CHECK(bus_read(&bus, 0xF200) == rom[bank * 4096 + 0x200]);
         }
     }
+    cart_free(&cart);
+}
+
+static void test_f4_and_f6_banks(void) {
+    uint8_t rom[8 * 4096];
+    for (unsigned superchip = 0; superchip < 2; superchip++) {
+        for (unsigned banks = 4; banks <= 8; banks += 4) {
+            for (unsigned bank = 0; bank < banks; bank++) {
+                for (unsigned offset = 0; offset < 4096; offset++) {
+                    rom[bank * 4096 + offset] = (uint8_t)(bank * 17 + offset);
+                }
+                if (superchip) {
+                    for (unsigned offset = 0; offset < 128; offset++)
+                        rom[bank * 4096 + 128 + offset] = rom[bank * 4096 + offset];
+                }
+            }
+            Cartridge cart;
+            Bus bus;
+            CHECK(cart_init_from_bytes(&cart, rom, banks * 4096, "bank test"));
+            CHECK(cart.type == (banks == 8 ? (superchip ? CART_TYPE_F4SC : CART_TYPE_F4)
+                                             : (superchip ? CART_TYPE_F6SC : CART_TYPE_F6)));
+            CHECK(cart.num_banks == (int)banks);
+            bus_init(&bus, NULL, NULL, &cart, NULL, NULL, NULL);
+            for (unsigned mirror = 0; mirror < 8; mirror++) {
+                for (unsigned bank = 0; bank < banks; bank++) {
+                    uint16_t hotspot = (uint16_t)(0x1000 + mirror * 0x2000 +
+                                                  (banks == 8 ? 0xFF4 : 0xFF6) + bank);
+                    bus_write(&bus, (uint16_t)((banks == 8 ? 0xFFF4 : 0xFFF6) +
+                                               (bank + 1) % banks), 0);
+                    CHECK(bus_read(&bus, hotspot) == rom[bank * 4096 + (hotspot & 0xFFF)]);
+                    CHECK(cart.current_bank == (int)bank);
+                    CHECK(bus_read(&bus, 0xF200) == rom[bank * 4096 + 0x200]);
+                    bus_write(&bus, (uint16_t)((banks == 8 ? 0xFFF4 : 0xFFF6) +
+                                               (bank + 1) % banks), 0);
+                    bus_write(&bus, hotspot, 0xFF);
+                    CHECK(cart.current_bank == (int)bank);
+                    (void)bus_read(&bus, (uint16_t)(banks == 8 ? 0xFFF3 : 0xFFF5));
+                    bus_write(&bus, (uint16_t)(banks == 8 ? 0xFFFC : 0xFFFA), 0);
+                    CHECK(cart.current_bank == (int)bank);
+                }
+            }
+            if (superchip) {
+                for (unsigned offset = 0; offset < 128; offset++)
+                    bus_write(&bus, (uint16_t)(0xF000 + offset), (uint8_t)(offset ^ 0xA5));
+                for (unsigned bank = 0; bank < banks; bank++) {
+                    bus_write(&bus, (uint16_t)((banks == 8 ? 0xFFF4 : 0xFFF6) + bank), 0);
+                    for (unsigned offset = 0; offset < 128; offset++)
+                        CHECK(bus_read(&bus, (uint16_t)(0xF080 + offset)) == (uint8_t)(offset ^ 0xA5));
+                }
+                bus_write(&bus, 0x0080, 0x39);
+                CHECK(bus_read(&bus, 0xF042) == 0x39);
+                CHECK(bus_read(&bus, 0xF0C2) == 0x39);
+                bus_write(&bus, 0xF0C2, 0x7B);
+                CHECK(bus_read(&bus, 0xF0C2) == 0x39);
+            } else {
+                bus_write(&bus, 0xF020, 0x5A);
+                CHECK(bus_read(&bus, 0xF020) == rom[(size_t)cart.current_bank * 4096 + 0x20]);
+            }
+            cart_free(&cart);
+        }
+    }
+}
+
+static void test_e0_slices(void) {
+    uint8_t rom[8192];
+    for (unsigned slice = 0; slice < 8; slice++) {
+        for (unsigned offset = 0; offset < 1024; offset++)
+            rom[slice * 1024 + offset] = (uint8_t)(slice * 19 + offset);
+    }
+    rom[0x100] = 0x8D; rom[0x101] = 0xE0; rom[0x102] = 0x1F;
+    Cartridge cart;
+    Bus bus;
+    CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "E0 test"));
+    CHECK(cart.type == CART_TYPE_E0);
+    bus_init(&bus, NULL, NULL, &cart, NULL, NULL, NULL);
+    unsigned selected[3] = {0, 1, 2};
+    for (unsigned region = 0; region < 3; region++)
+        bus_write(&bus, (uint16_t)(0x1FE0 + region * 8 + selected[region]), 0);
+    for (unsigned region = 0; region < 3; region++) {
+        for (unsigned bank = 0; bank < 8; bank++) {
+            uint16_t hotspot = (uint16_t)(0x1FE0 + region * 8 + bank);
+            bus_write(&bus, hotspot, 0);
+            selected[region] = bank;
+            for (unsigned other = 0; other < 3; other++)
+                CHECK(bus_read(&bus, (uint16_t)(0xF080 + other * 1024)) ==
+                      rom[selected[other] * 1024 + 0x80]);
+            CHECK(bus_read(&bus, (uint16_t)(0xF080 + region * 1024)) == rom[bank * 1024 + 0x80]);
+            CHECK(bus_read(&bus, 0xFC80) == rom[7 * 1024 + 0x80]);
+            bus_write(&bus, (uint16_t)(0x1FE0 + region * 8 + (bank + 1) % 8), 0);
+            (void)bus_read(&bus, (uint16_t)(hotspot + 0xE000));
+            CHECK(bus_read(&bus, (uint16_t)(0xF080 + region * 1024)) == rom[bank * 1024 + 0x80]);
+        }
+    }
+    cart_free(&cart);
+}
+
+static void test_ef_banks(void) {
+    uint8_t rom[65536];
+    for (unsigned bank = 0; bank < 16; bank++)
+        for (unsigned offset = 0; offset < 4096; offset++)
+            rom[bank * 4096 + offset] = (uint8_t)(bank * 17 + offset);
+    rom[sizeof(rom) - 8] = 'E';
+    rom[sizeof(rom) - 7] = 'F';
+    rom[sizeof(rom) - 6] = 'E';
+    rom[sizeof(rom) - 5] = 'F';
+    Cartridge cart;
+    Bus bus;
+    CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "EF test"));
+    CHECK(cart.type == CART_TYPE_EF);
+    CHECK(cart.num_banks == 16);
+    bus_init(&bus, NULL, NULL, &cart, NULL, NULL, NULL);
+    for (unsigned mirror = 0; mirror < 8; mirror++) {
+        for (unsigned bank = 0; bank < 16; bank++) {
+            uint16_t hotspot = (uint16_t)(0x1FE0 + mirror * 0x2000 + bank);
+            bus_write(&bus, (uint16_t)(0xFFE0 + (bank + 1) % 16), 0);
+            CHECK(bus_read(&bus, hotspot) == rom[bank * 4096 + 0xFE0 + bank]);
+            CHECK(cart.current_bank == (int)bank);
+            bus_write(&bus, (uint16_t)(0xFFE0 + (bank + 1) % 16), 0);
+            bus_write(&bus, hotspot, 0);
+            CHECK(cart.current_bank == (int)bank);
+            CHECK(bus_read(&bus, 0xF200) == rom[bank * 4096 + 0x200]);
+            (void)bus_read(&bus, 0xFFDF);
+            bus_write(&bus, 0xFFF0, 0);
+            CHECK(cart.current_bank == (int)bank);
+        }
+    }
+    cart_free(&cart);
+}
+
+static unsigned mapper_tia_writes;
+static uint16_t mapper_tia_address;
+static uint8_t mapper_tia_value;
+
+static void mapper_tia_write(TIA *tia, uint16_t address, uint8_t value) {
+    (void)tia;
+    mapper_tia_writes++;
+    mapper_tia_address = address;
+    mapper_tia_value = value;
+}
+
+static void test_3f_banks_and_tia(void) {
+    uint8_t rom[65536];
+    for (unsigned bank = 0; bank < 32; bank++)
+        for (unsigned offset = 0; offset < 2048; offset++)
+            rom[bank * 2048 + offset] = (uint8_t)(bank * 7 + offset);
+    rom[0x100] = 0x85; rom[0x101] = 0x3F;
+    rom[0x110] = 0x85; rom[0x111] = 0x3F;
+    Cartridge cart;
+    Bus bus;
+    TIA tia = {0};
+    CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "3F test"));
+    CHECK(cart.type == CART_TYPE_3F);
+    CHECK(cart.num_banks == 32);
+    bus_init(&bus, &tia, NULL, &cart, NULL, NULL, mapper_tia_write);
+    for (unsigned bank = 0; bank < 32; bank++) {
+        unsigned address = 0x3F + (bank % 8) * 0x2000;
+        mapper_tia_writes = 0;
+        bus_write(&bus, (uint16_t)address, (uint8_t)bank);
+        CHECK(mapper_tia_writes == 1 && mapper_tia_address == 0x3F && mapper_tia_value == bank);
+        CHECK(bus_read(&bus, 0xF200) == rom[bank * 2048 + 0x200]);
+        CHECK(bus_read(&bus, 0xFA00) == rom[31 * 2048 + 0x200]);
+    }
+    bus_write(&bus, 0x0009, 0xE2);
+    CHECK(cart.current_bank == 2);
+    CHECK(mapper_tia_address == 9 && mapper_tia_value == 0xE2);
+    bus_write(&bus, 0x0040, 17);
+    CHECK(cart.current_bank == 2);
+    bus_write(&bus, 0x103F, 17);
+    CHECK(cart.current_bank == 2);
+    (void)bus_read(&bus, 0x003F);
+    CHECK(cart.current_bank == 2);
+    CPU6502 cpu;
+    cpu_init(&cpu, &bus);
+    bus.ram[0] = 0x85; /* STA $3F */
+    bus.ram[1] = 0x3F;
+    cpu.PC = 0x0080;
+    cpu.A = 27;
+    mapper_tia_writes = 0;
+    CHECK(cpu_step(&cpu) == 3);
+    CHECK(cart.current_bank == 27);
+    CHECK(mapper_tia_writes == 1 && mapper_tia_address == 0x3F && mapper_tia_value == 27);
+    CHECK(bus_read(&bus, 0xF200) == rom[27 * 2048 + 0x200]);
     cart_free(&cart);
 }
 
@@ -446,6 +629,10 @@ int main(void) {
     test_fe_subroutine_bank_switch();
     test_fa_ram_and_banks();
     test_f8_rom_banks();
+    test_f4_and_f6_banks();
+    test_e0_slices();
+    test_ef_banks();
+    test_3f_banks_and_tia();
     test_unbanked_rom_mirrors();
     test_f6sc_all_mirrors();
     test_f6sc_shared_ram();
@@ -453,6 +640,6 @@ int main(void) {
     test_superchip_write_port_reads();
     test_f6sc_cpu_write_port_reads();
     test_f6sc_indexed_dummy_reads();
-    puts("F6SC cartridge tests passed");
+    puts("Cartridge tests passed");
     return EXIT_SUCCESS;
 }

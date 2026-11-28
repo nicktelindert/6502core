@@ -22,8 +22,8 @@ struct Cartridge {
     size_t rom_size;
     uint16_t mask;           /* 0x07FF voor <= 2K, 0x0FFF voor 4K */
 
-    const uint8_t *banks[4]; /* Pointers naar 4KB banks (voor F8 / F6 / F6SC) */
-    int num_banks;           /* 2 voor F8, 4 voor F6/F6SC */
+    const uint8_t *banks[32];
+    int num_banks;
     int current_bank;
 
     uint8_t superchip_ram[256];

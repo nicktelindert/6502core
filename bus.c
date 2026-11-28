@@ -142,6 +142,9 @@ void bus_write(Bus *bus, uint16_t address, uint8_t value) {
             cart_write(cart, addr, v);
         }
     } else if ((addr & 0x0080u) == 0) {
+        if (cart && cart->type == CART_TYPE_3F && addr <= 0x003Fu) {
+            cart_write(cart, addr, v);
+        }
         if (bus->tia_write && bus->tia) {
             bus->tia_write(bus->tia, (uint16_t)(addr & 0x3Fu), v);
         }
