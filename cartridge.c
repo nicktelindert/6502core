@@ -46,7 +46,7 @@ static DpcState dpc;
 static void dpc_reset_state(const uint8_t *rom_data, size_t size) {
     memset(&dpc, 0, sizeof(dpc));
     dpc.random_number = 0x01u;
-    dpc.music_pitch = 1.0;
+    dpc.music_pitch = 20000.0; /* Stella default DPC oscillator frequency */
     dpc.clock_rate = 1193191.66666667; /* Stella NTSC */
 
     if (rom_data && size >= 0x2800u) {
@@ -70,9 +70,6 @@ static void dpc_update_flag(int f) {
         dpc.flags[f] = 0x00u;
     }
 }
-
-#define DPC_MUSIC_PERIOD_CPU_CYCLES 38u
-
 
 static void dpc_update_music_fetchers(void) {
     uint64_t cycles = dpc.total_cycles - dpc.audio_cycles;
@@ -392,7 +389,7 @@ static void write_ef(Cartridge *cart, uint16_t address, uint8_t value) {
 }
 
 static void check_hotspot_3f(Cartridge *cart, uint16_t address, uint8_t value) {
-    if ((address & 0x003Fu) == 0x003Fu && cart->num_banks > 0) {
+    if ((address & 0x1FFFu) <= 0x003Fu && cart->num_banks > 0) {
         cart->current_bank = (int)(value % (uint8_t)cart->num_banks);
     }
 }
@@ -473,6 +470,23 @@ static uint8_t read_f8sc(Cartridge *cart, uint16_t address) {
         return cart->superchip_ram[addr & 0x007Fu];
     }
     return read_f8(cart, address);
+}
+
+static uint8_t read_f4sc(Cartridge *cart, uint16_t address) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1080u && addr <= 0x10FFu) {
+        return cart->superchip_ram[addr & 0x007Fu];
+    }
+    return read_f4(cart, address);
+}
+
+static void write_f4sc(Cartridge *cart, uint16_t address, uint8_t value) {
+    uint16_t addr = (uint16_t)(address & 0x1FFFu);
+    if (addr >= 0x1000u && addr <= 0x107Fu) {
+        cart->superchip_ram[addr & 0x007Fu] = value;
+        return;
+    }
+    write_f4(cart, address, value);
 }
 
 static void write_f8sc(Cartridge *cart, uint16_t address, uint8_t value) {
@@ -578,7 +592,7 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
 
         case CART_TYPE_3F:
             cart->num_banks = (int)(size / 0x0800u);
-            for (int b = 0; b < cart->num_banks && b < 16; b++) {
+            for (int b = 0; b < cart->num_banks; b++) {
                 cart->banks[b] = &cart->rom_data[(size_t)b * 0x0800u];
             }
             cart->current_bank = 0;
@@ -656,8 +670,8 @@ bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size,
             /* fallthrough */
         case CART_TYPE_F4:
             cart->num_banks = 8;
-            cart->read = read_f4;
-            cart->write = write_f4;
+            cart->read = cart->has_superchip_ram ? read_f4sc : read_f4;
+            cart->write = cart->has_superchip_ram ? write_f4sc : write_f4;
             for (int b = 0; b < 8; b++) {
                 cart->banks[b] = &cart->rom_data[(size_t)b * 0x1000u];
             }
@@ -697,7 +711,14 @@ void cart_free(Cartridge *cart) {
     cart->rom_size = 0;
 }
 
-uint8_t cart_read(Cartridge *cart, uint16_t addr) {
+uint8_t cart_read(Cartridge *cart, uint16_t addr, uint8_t data_bus) {
+    uint16_t physical_addr = (uint16_t)(addr & 0x1FFFu);
+    if ((cart->type == CART_TYPE_F4SC || cart->type == CART_TYPE_F6SC ||
+         cart->type == CART_TYPE_F8SC) &&
+        physical_addr >= 0x1000u && physical_addr <= 0x107Fu) {
+        cart->superchip_ram[physical_addr & 0x007Fu] = data_bus;
+        return data_bus;
+    }
     return cart->read ? cart->read(cart, addr) : 0xFFu;
 }
 
@@ -713,4 +734,11 @@ void cart_step_cycles(Cartridge *cart, int cycles) {
     }
 
     dpc.total_cycles += (uint64_t)cycles;
+}
+
+void cart_set_video_standard(Cartridge *cart, VideoStandard standard) {
+    if (cart && cart->type == CART_TYPE_DPC) {
+        dpc_update_music_fetchers();
+        dpc.clock_rate = video_cpu_clock(standard);
+    }
 }

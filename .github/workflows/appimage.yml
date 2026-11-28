@@ -1,0 +1,56 @@
+name: Build AppImage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsdl2-dev desktop-file-utils
+      - name: Run tests
+        run: make test
+      - name: Download verified linuxdeploy
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/linuxdeploy.AppImage" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          echo "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  $RUNNER_TEMP/linuxdeploy.AppImage" | sha256sum -c
+          chmod +x "$RUNNER_TEMP/linuxdeploy.AppImage"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/runtime-x86_64" \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          echo "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $RUNNER_TEMP/runtime-x86_64" | sha256sum -c
+      - name: Build AppImage
+        run: |
+          desktop-file-validate packaging/6502core.desktop
+          sh packaging/build-appimage.sh "$RUNNER_TEMP/linuxdeploy.AppImage" "$RUNNER_TEMP/runtime-x86_64" "$RUNNER_TEMP/6502core-x86_64.AppImage"
+      - name: Verify AppImage contents
+        working-directory: ${{ runner.temp }}
+        run: |
+          ./6502core-x86_64.AppImage --appimage-extract >/dev/null
+          test -x squashfs-root/AppRun
+          test -x squashfs-root/usr/bin/6502core
+          test -f squashfs-root/6502core.desktop
+          test -f squashfs-root/6502core.svg
+          test -f squashfs-root/usr/lib/libSDL2-2.0.so.0
+          test -f squashfs-root/usr/share/licenses/6502core/LICENSE.TXT
+          if ldd squashfs-root/usr/bin/6502core | grep 'not found'; then
+            echo "AppImage has missing shared libraries" >&2
+            exit 1
+          fi
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: 6502core-linux-x86_64
+          path: ${{ runner.temp }}/6502core-x86_64.AppImage
+          if-no-files-found: error

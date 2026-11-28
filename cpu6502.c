@@ -1,47 +1,50 @@
-#include "cpu6507.h"
+#include "cpu6502.h"
 #include "addressing.h"
 #include <stdio.h>
-#include "bus.h"
-#include "cartridge.h"
+#include <stdlib.h>
 
 
 /* --- Gedeelde helpers (ook gebruikt door addressing.c) --- */
 
-uint8_t cpu_read_mem(CPU6507 *cpu, uint16_t address) {
-    return bus_read(cpu->bus, address);
+uint8_t cpu_read_mem(CPU6502 *cpu, uint16_t address) {
+    return cpu->bus.read(cpu->bus.context, address);
 }
 
-uint8_t cpu_fetch_u8(CPU6507 *cpu) {
+void cpu_tick(CPU6502 *cpu, int cycles) {
+    cpu->bus.tick(cpu->bus.context, cycles);
+}
+
+uint8_t cpu_fetch_u8(CPU6502 *cpu) {
     uint8_t val = cpu_read_mem(cpu, cpu->PC);
     cpu->PC = (uint16_t)(cpu->PC + 1u);
     return val;
 }
 
-void cpu_set_page_crossed(CPU6507 *cpu, bool crossed) {
+void cpu_set_page_crossed(CPU6502 *cpu, bool crossed) {
     cpu->page_crossed = crossed;
 }
 
 /* --- Interne CPU-helpers --- */
 
-static void cpu_write_mem(CPU6507 *cpu, uint16_t address, uint8_t value) {
-    bus_write(cpu->bus, address, value);
+static void cpu_write_mem(CPU6502 *cpu, uint16_t address, uint8_t value) {
+    cpu->bus.write(cpu->bus.context, address, value);
 }
 
-static void cpu_push_byte(CPU6507 *cpu, uint8_t value) {
+static void cpu_push_byte(CPU6502 *cpu, uint8_t value) {
     cpu_write_mem(cpu, (uint16_t)(0x0100u | cpu->SP), value);
     cpu->SP = (uint8_t)(cpu->SP - 1u);
 }
 
-static uint8_t cpu_pull_byte(CPU6507 *cpu) {
+static uint8_t cpu_pull_byte(CPU6502 *cpu) {
     cpu->SP = (uint8_t)(cpu->SP + 1u);
     return cpu_read_mem(cpu, (uint16_t)(0x0100u | cpu->SP));
 }
 
-static bool cpu_get_flag(const CPU6507 *cpu, uint8_t flag) {
+static bool cpu_get_flag(const CPU6502 *cpu, uint8_t flag) {
     return (cpu->status & flag) != 0;
 }
 
-static void cpu_set_flag(CPU6507 *cpu, uint8_t flag, bool enabled) {
+static void cpu_set_flag(CPU6502 *cpu, uint8_t flag, bool enabled) {
     if (enabled) {
         cpu->status |= flag;
     } else {
@@ -49,81 +52,79 @@ static void cpu_set_flag(CPU6507 *cpu, uint8_t flag, bool enabled) {
     }
 }
 
-static void cpu_update_zn(CPU6507 *cpu, uint8_t value) {
+static void cpu_update_zn(CPU6502 *cpu, uint8_t value) {
     cpu_set_flag(cpu, CPU_FLAG_Z, value == 0);
     cpu_set_flag(cpu, CPU_FLAG_N, (value & 0x80u) != 0);
 }
 
 /* --- Instructions --- */
 
-static void instr_unimplemented(CPU6507 *cpu, uint16_t addr) {
+static void instr_unimplemented(CPU6502 *cpu, uint16_t addr) {
     (void)addr;
     uint16_t op_pc = (uint16_t)(cpu->PC - 1u);
     uint8_t op = cpu_read_mem(cpu, op_pc);
     fprintf(stderr, "Onbekende opcode: 0x%02X op 0x%04X\n", op, op_pc);
 }
 
-static void instr_NOP(CPU6507 *cpu, uint16_t addr) { (void)cpu; (void)addr; }
-static void instr_JMP(CPU6507 *cpu, uint16_t addr) { cpu->PC = addr; }
-static void instr_SEI(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_I, true); }
-static void instr_CLI(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_I, false); }
-static void instr_CLD(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_D, false); }
-static void instr_SED(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_D, true); }
-static void instr_CLV(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_V, false); }
-static void instr_CLC(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_C, false); }
-static void instr_SEC(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_C, true); }
+static void instr_NOP(CPU6502 *cpu, uint16_t addr) { (void)cpu; (void)addr; }
+static void instr_JMP(CPU6502 *cpu, uint16_t addr) { cpu->PC = addr; }
+static void instr_SEI(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_I, true); }
+static void instr_CLI(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_I, false); }
+static void instr_CLD(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_D, false); }
+static void instr_SED(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_D, true); }
+static void instr_CLV(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_V, false); }
+static void instr_CLC(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_C, false); }
+static void instr_SEC(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu_set_flag(cpu, CPU_FLAG_C, true); }
 
-static void instr_LDA(CPU6507 *cpu, uint16_t addr) { cpu->A = cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->A); }
-static void instr_LDX(CPU6507 *cpu, uint16_t addr) { cpu->X = cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->X); }
-static void instr_LDY(CPU6507 *cpu, uint16_t addr) { cpu->Y = cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->Y); }
+static void instr_LDA(CPU6502 *cpu, uint16_t addr) { cpu->A = cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->A); }
+static void instr_LDX(CPU6502 *cpu, uint16_t addr) { cpu->X = cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->X); }
+static void instr_LDY(CPU6502 *cpu, uint16_t addr) { cpu->Y = cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->Y); }
 
-static void instr_STA(CPU6507 *cpu, uint16_t addr) { cpu_write_mem(cpu, addr, cpu->A); }
-static void instr_STX(CPU6507 *cpu, uint16_t addr) { cpu_write_mem(cpu, addr, cpu->X); }
-static void instr_STY(CPU6507 *cpu, uint16_t addr) { cpu_write_mem(cpu, addr, cpu->Y); }
+static void instr_STA(CPU6502 *cpu, uint16_t addr) { cpu_write_mem(cpu, addr, cpu->A); }
+static void instr_STX(CPU6502 *cpu, uint16_t addr) { cpu_write_mem(cpu, addr, cpu->X); }
+static void instr_STY(CPU6502 *cpu, uint16_t addr) { cpu_write_mem(cpu, addr, cpu->Y); }
 
-static void instr_TXS(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->SP = cpu->X; }
-static void instr_TSX(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->X = cpu->SP; cpu_update_zn(cpu, cpu->X); }
-static void instr_TAY(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->Y = cpu->A; cpu_update_zn(cpu, cpu->Y); }
-static void instr_TAX(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->X = cpu->A; cpu_update_zn(cpu, cpu->X); }
-static void instr_TYA(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->A = cpu->Y; cpu_update_zn(cpu, cpu->A); }
-static void instr_TXA(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->A = cpu->X; cpu_update_zn(cpu, cpu->A); }
+static void instr_TXS(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->SP = cpu->X; }
+static void instr_TSX(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->X = cpu->SP; cpu_update_zn(cpu, cpu->X); }
+static void instr_TAY(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->Y = cpu->A; cpu_update_zn(cpu, cpu->Y); }
+static void instr_TAX(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->X = cpu->A; cpu_update_zn(cpu, cpu->X); }
+static void instr_TYA(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->A = cpu->Y; cpu_update_zn(cpu, cpu->A); }
+static void instr_TXA(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->A = cpu->X; cpu_update_zn(cpu, cpu->A); }
 
-static void instr_DEX(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->X = (uint8_t)(cpu->X - 1u); cpu_update_zn(cpu, cpu->X); }
-static void instr_DEY(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->Y = (uint8_t)(cpu->Y - 1u); cpu_update_zn(cpu, cpu->Y); }
-static void instr_INX(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->X = (uint8_t)(cpu->X + 1u); cpu_update_zn(cpu, cpu->X); }
-static void instr_INY(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu->Y = (uint8_t)(cpu->Y + 1u); cpu_update_zn(cpu, cpu->Y); }
+static void instr_DEX(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->X = (uint8_t)(cpu->X - 1u); cpu_update_zn(cpu, cpu->X); }
+static void instr_DEY(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->Y = (uint8_t)(cpu->Y - 1u); cpu_update_zn(cpu, cpu->Y); }
+static void instr_INX(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->X = (uint8_t)(cpu->X + 1u); cpu_update_zn(cpu, cpu->X); }
+static void instr_INY(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu->Y = (uint8_t)(cpu->Y + 1u); cpu_update_zn(cpu, cpu->Y); }
 
-static void branch_if(CPU6507 *cpu, bool condition, uint16_t addr) {
+static void branch_if(CPU6502 *cpu, bool condition, uint16_t addr) {
     if (!condition) {
         return;
     }
 
-    /* Dummy-cycle van een genomen branch. */
-    bus_tick(cpu->bus, 1);
+    uint16_t old_pc = cpu->PC;
+    (void)cpu_read_mem(cpu, old_pc);
     cpu->extra_cycles += 1;
 
-    uint16_t old_pc = cpu->PC;
     bool crossed = (old_pc & 0xFF00u) != (addr & 0xFF00u);
 
-    cpu->PC = addr;
-
     if (crossed) {
-        /* Extra cycle bij branch over een paginagrens. */
-        bus_tick(cpu->bus, 1);
+        uint16_t uncorrected = (uint16_t)((old_pc & 0xFF00u) | (addr & 0x00FFu));
+        (void)cpu_read_mem(cpu, uncorrected);
         cpu->extra_cycles += 1;
     }
+    cpu->PC = addr;
 }
 
-static void instr_BNE(CPU6507 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_Z), addr); }
-static void instr_BEQ(CPU6507 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_Z), addr); }
-static void instr_BPL(CPU6507 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_N), addr); }
-static void instr_BMI(CPU6507 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_N), addr); }
-static void instr_BCC(CPU6507 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_C), addr); }
-static void instr_BCS(CPU6507 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_C), addr); }
-static void instr_BVC(CPU6507 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_V), addr); }
-static void instr_BVS(CPU6507 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_V), addr); }
+static void instr_BNE(CPU6502 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_Z), addr); }
+static void instr_BEQ(CPU6502 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_Z), addr); }
+static void instr_BPL(CPU6502 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_N), addr); }
+static void instr_BMI(CPU6502 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_N), addr); }
+static void instr_BCC(CPU6502 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_C), addr); }
+static void instr_BCS(CPU6502 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_C), addr); }
+static void instr_BVC(CPU6502 *cpu, uint16_t addr) { branch_if(cpu, !cpu_get_flag(cpu, CPU_FLAG_V), addr); }
+static void instr_BVS(CPU6502 *cpu, uint16_t addr) { branch_if(cpu,  cpu_get_flag(cpu, CPU_FLAG_V), addr); }
 
-static void instr_DEC(CPU6507 *cpu, uint16_t addr) {
+static void instr_DEC(CPU6502 *cpu, uint16_t addr) {
     uint8_t old_val = cpu_read_mem(cpu, addr);
     cpu_write_mem(cpu, addr, old_val); /* RMW dummy write */
     uint8_t val = (uint8_t)(old_val - 1u);
@@ -131,7 +132,7 @@ static void instr_DEC(CPU6507 *cpu, uint16_t addr) {
     cpu_update_zn(cpu, val);
 }
 
-static void instr_INC(CPU6507 *cpu, uint16_t addr) {
+static void instr_INC(CPU6502 *cpu, uint16_t addr) {
     uint8_t old_val = cpu_read_mem(cpu, addr);
     cpu_write_mem(cpu, addr, old_val); /* RMW dummy write */
     uint8_t val = (uint8_t)(old_val + 1u);
@@ -139,29 +140,29 @@ static void instr_INC(CPU6507 *cpu, uint16_t addr) {
     cpu_update_zn(cpu, val);
 }
 
-static void instr_PHP(CPU6507 *cpu, uint16_t addr) {
+static void instr_PHP(CPU6502 *cpu, uint16_t addr) {
     (void)addr;
     uint8_t st = (uint8_t)(cpu->status | CPU_FLAG_U | CPU_FLAG_B);
     cpu_push_byte(cpu, st);
 }
 
-static void instr_PLP(CPU6507 *cpu, uint16_t addr) {
+static void instr_PLP(CPU6502 *cpu, uint16_t addr) {
     (void)addr;
     (void)cpu_read_mem(cpu, cpu->PC); /* dummy read */
     uint8_t st = cpu_pull_byte(cpu);
     cpu->status = (uint8_t)((st & ~(CPU_FLAG_B | CPU_FLAG_U)) | CPU_FLAG_U);
 }
 
-static void instr_PHA(CPU6507 *cpu, uint16_t addr) { (void)addr; cpu_push_byte(cpu, cpu->A); }
+static void instr_PHA(CPU6502 *cpu, uint16_t addr) { (void)addr; cpu_push_byte(cpu, cpu->A); }
 
-static void instr_PLA(CPU6507 *cpu, uint16_t addr) {
+static void instr_PLA(CPU6502 *cpu, uint16_t addr) {
     (void)addr;
     (void)cpu_read_mem(cpu, cpu->PC); /* dummy read */
     cpu->A = cpu_pull_byte(cpu);
     cpu_update_zn(cpu, cpu->A);
 }
 
-static void instr_BRK(CPU6507 *cpu, uint16_t addr) {
+static void instr_BRK(CPU6502 *cpu, uint16_t addr) {
     (void)addr;
     cpu->PC = (uint16_t)(cpu->PC + 1u);
     cpu_push_byte(cpu, (uint8_t)((cpu->PC >> 8) & 0xFFu));
@@ -173,7 +174,7 @@ static void instr_BRK(CPU6507 *cpu, uint16_t addr) {
     cpu->PC = (uint16_t)(((uint16_t)hi << 8) | lo);
 }
 
-static void instr_RTI(CPU6507 *cpu, uint16_t addr) {
+static void instr_RTI(CPU6502 *cpu, uint16_t addr) {
     (void)addr;
     instr_PLP(cpu, 0);
     uint8_t lo = cpu_pull_byte(cpu);
@@ -181,33 +182,33 @@ static void instr_RTI(CPU6507 *cpu, uint16_t addr) {
     cpu->PC = (uint16_t)(((uint16_t)hi << 8) | lo);
 }
 
-static void instr_JSR(CPU6507 *cpu, uint16_t addr) {
+static void instr_JSR(CPU6502 *cpu, uint16_t addr) {
     uint16_t ret = (uint16_t)(cpu->PC - 1u);
 
-    bus_tick(cpu->bus, 1); /* ontbrekende JSR-cycle */
+    cpu_tick(cpu, 1); /* ontbrekende JSR-cycle */
 
     cpu_push_byte(cpu, (uint8_t)(ret >> 8));
     cpu_push_byte(cpu, (uint8_t)ret);
 
-    if (cpu->bus && cpu->bus->cart) {
-        cart_fe_on_byte(cpu->bus->cart, (uint8_t)(addr >> 8));
+    if (cpu->bus.on_jsr) {
+        cpu->bus.on_jsr(cpu->bus.context, (uint8_t)(addr >> 8));
     }
     cpu->PC = addr;
 }
 
-static void instr_RTS(CPU6507 *cpu, uint16_t addr) {
+static void instr_RTS(CPU6502 *cpu, uint16_t addr) {
     (void)addr;
-    bus_tick(cpu->bus, 2); /* ontbrekende RTS-cycle */
+    cpu_tick(cpu, 2); /* ontbrekende RTS-cycle */
     uint8_t lo = cpu_pull_byte(cpu);
     uint8_t hi = cpu_pull_byte(cpu);
-    if (cpu->bus && cpu->bus->cart) {
-        cart_fe_on_rts_hi(cpu->bus->cart, hi);
+    if (cpu->bus.on_rts) {
+        cpu->bus.on_rts(cpu->bus.context, hi);
     }
     cpu->PC = (uint16_t)((((uint16_t)hi << 8) | lo) + 1u);
 }
 
-static void instr_ASL(CPU6507 *cpu, uint16_t addr) {
-    bool is_acc = (addr == ADDR_NONE);
+static void instr_ASL(CPU6502 *cpu, uint16_t addr) {
+    bool is_acc = cpu->accumulator_mode;
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
 
     if (!is_acc) {
@@ -225,8 +226,8 @@ static void instr_ASL(CPU6507 *cpu, uint16_t addr) {
     }
 }
 
-static void instr_LSR(CPU6507 *cpu, uint16_t addr) {
-    bool is_acc = (addr == ADDR_NONE);
+static void instr_LSR(CPU6502 *cpu, uint16_t addr) {
+    bool is_acc = cpu->accumulator_mode;
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
 
     if (!is_acc) {
@@ -243,8 +244,8 @@ static void instr_LSR(CPU6507 *cpu, uint16_t addr) {
     }
 }
 
-static void instr_ROL(CPU6507 *cpu, uint16_t addr) {
-    bool is_acc = (addr == ADDR_NONE);
+static void instr_ROL(CPU6502 *cpu, uint16_t addr) {
+    bool is_acc = cpu->accumulator_mode;
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
 
     if (!is_acc) {
@@ -262,8 +263,8 @@ static void instr_ROL(CPU6507 *cpu, uint16_t addr) {
     }
 }
 
-static void instr_ROR(CPU6507 *cpu, uint16_t addr) {
-    bool is_acc = (addr == ADDR_NONE);
+static void instr_ROR(CPU6502 *cpu, uint16_t addr) {
+    bool is_acc = cpu->accumulator_mode;
     uint8_t val = is_acc ? cpu->A : cpu_read_mem(cpu, addr);
 
     if (!is_acc) {
@@ -281,29 +282,29 @@ static void instr_ROR(CPU6507 *cpu, uint16_t addr) {
     }
 }
 
-static void instr_AND(CPU6507 *cpu, uint16_t addr) { cpu->A &= cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->A); }
-static void instr_EOR(CPU6507 *cpu, uint16_t addr) { cpu->A ^= cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->A); }
-static void instr_ORA(CPU6507 *cpu, uint16_t addr) { cpu->A |= cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->A); }
+static void instr_AND(CPU6502 *cpu, uint16_t addr) { cpu->A &= cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->A); }
+static void instr_EOR(CPU6502 *cpu, uint16_t addr) { cpu->A ^= cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->A); }
+static void instr_ORA(CPU6502 *cpu, uint16_t addr) { cpu->A |= cpu_read_mem(cpu, addr); cpu_update_zn(cpu, cpu->A); }
 
-static void instr_BIT(CPU6507 *cpu, uint16_t addr) {
+static void instr_BIT(CPU6502 *cpu, uint16_t addr) {
     uint8_t val = cpu_read_mem(cpu, addr);
     cpu_set_flag(cpu, CPU_FLAG_Z, (cpu->A & val) == 0);
     cpu_set_flag(cpu, CPU_FLAG_N, (val & 0x80u) != 0);
     cpu_set_flag(cpu, CPU_FLAG_V, (val & 0x40u) != 0);
 }
 
-static void do_cmp(CPU6507 *cpu, uint8_t reg, uint16_t addr) {
+static void do_cmp(CPU6502 *cpu, uint8_t reg, uint16_t addr) {
     uint8_t val = cpu_read_mem(cpu, addr);
     uint8_t res = (uint8_t)(reg - val);
     cpu_set_flag(cpu, CPU_FLAG_C, reg >= val);
     cpu_update_zn(cpu, res);
 }
 
-static void instr_CMP(CPU6507 *cpu, uint16_t addr) { do_cmp(cpu, cpu->A, addr); }
-static void instr_CPX(CPU6507 *cpu, uint16_t addr) { do_cmp(cpu, cpu->X, addr); }
-static void instr_CPY(CPU6507 *cpu, uint16_t addr) { do_cmp(cpu, cpu->Y, addr); }
+static void instr_CMP(CPU6502 *cpu, uint16_t addr) { do_cmp(cpu, cpu->A, addr); }
+static void instr_CPX(CPU6502 *cpu, uint16_t addr) { do_cmp(cpu, cpu->X, addr); }
+static void instr_CPY(CPU6502 *cpu, uint16_t addr) { do_cmp(cpu, cpu->Y, addr); }
 
-static void instr_ADC(CPU6507 *cpu, uint16_t addr) {
+static void instr_ADC(CPU6502 *cpu, uint16_t addr) {
     uint8_t val = cpu_read_mem(cpu, addr);
     uint8_t carry_in = cpu_get_flag(cpu, CPU_FLAG_C) ? 1u : 0u;
 
@@ -311,12 +312,14 @@ static void instr_ADC(CPU6507 *cpu, uint16_t addr) {
         int low = (cpu->A & 0x0F) + (val & 0x0F) + carry_in;
         if (low > 9) low += 6;
         int high = (cpu->A >> 4) + (val >> 4) + (low > 0x0F ? 1 : 0);
-        uint8_t bin_res = (uint8_t)((cpu->A + val + carry_in) & 0xFFu);
-        cpu_set_flag(cpu, CPU_FLAG_V, ((~(cpu->A ^ val) & (cpu->A ^ bin_res)) & 0x80u) != 0);
+        uint8_t binary = (uint8_t)(cpu->A + val + carry_in);
+        uint8_t intermediate = (uint8_t)((high << 4) | (low & 0x0F));
+        cpu_set_flag(cpu, CPU_FLAG_Z, binary == 0);
+        cpu_set_flag(cpu, CPU_FLAG_N, (intermediate & 0x80u) != 0);
+        cpu_set_flag(cpu, CPU_FLAG_V, ((~(cpu->A ^ val) & (cpu->A ^ intermediate)) & 0x80u) != 0);
         if (high > 9) high += 6;
         cpu_set_flag(cpu, CPU_FLAG_C, high > 0x0F);
         cpu->A = (uint8_t)(((high & 0x0F) << 4) | (low & 0x0F));
-        cpu_update_zn(cpu, cpu->A);
         return;
     }
 
@@ -328,7 +331,7 @@ static void instr_ADC(CPU6507 *cpu, uint16_t addr) {
     cpu_update_zn(cpu, cpu->A);
 }
 
-static void instr_SBC(CPU6507 *cpu, uint16_t addr) {
+static void instr_SBC(CPU6502 *cpu, uint16_t addr) {
     uint8_t val = cpu_read_mem(cpu, addr);
     uint8_t raw_val = (uint8_t)(val ^ 0xFFu);
     uint8_t carry_in = cpu_get_flag(cpu, CPU_FLAG_C) ? 1u : 0u;
@@ -347,7 +350,7 @@ static void instr_SBC(CPU6507 *cpu, uint16_t addr) {
         cpu_set_flag(cpu, CPU_FLAG_C, bin_total > 0xFF);
         cpu_set_flag(cpu, CPU_FLAG_V, ((~(cpu->A ^ raw_val) & (cpu->A ^ bin_res)) & 0x80u) != 0);
         cpu->A = (uint8_t)(((high & 0x0F) << 4) | (low & 0x0F));
-        cpu_update_zn(cpu, cpu->A);
+        cpu_update_zn(cpu, bin_res);
         return;
     }
 
@@ -361,12 +364,12 @@ static void instr_SBC(CPU6507 *cpu, uint16_t addr) {
 
 /* --- Undocumented --- */
 
-static void instr_SHX(CPU6507 *cpu, uint16_t addr) {
+static void instr_SHX(CPU6502 *cpu, uint16_t addr) {
     uint8_t high = (uint8_t)(((addr - cpu->Y) >> 8) & 0xFFu);
     cpu_write_mem(cpu, addr, (uint8_t)(cpu->X & (uint8_t)(high + 1u)));
 }
 
-static void instr_SLO(CPU6507 *cpu, uint16_t addr) {
+static void instr_SLO(CPU6502 *cpu, uint16_t addr) {
     uint8_t val = cpu_read_mem(cpu, addr);
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x80u) != 0);
     val = (uint8_t)(val << 1);
@@ -375,7 +378,7 @@ static void instr_SLO(CPU6507 *cpu, uint16_t addr) {
     cpu_update_zn(cpu, cpu->A);
 }
 
-static void instr_RLA(CPU6507 *cpu, uint16_t addr) {
+static void instr_RLA(CPU6502 *cpu, uint16_t addr) {
     uint8_t val = cpu_read_mem(cpu, addr);
     uint8_t old_c = cpu_get_flag(cpu, CPU_FLAG_C) ? 1u : 0u;
     cpu_set_flag(cpu, CPU_FLAG_C, (val & 0x80u) != 0);
@@ -387,14 +390,14 @@ static void instr_RLA(CPU6507 *cpu, uint16_t addr) {
 
 /* --- Opcode Table & Lifecycle --- */
 
-static void set_op(CPU6507 *cpu, uint8_t op, InstrFn exec, AddrModeFn mode, uint8_t base_cycles, bool page_penalty) {
+static void set_op(CPU6502 *cpu, uint8_t op, InstrFn exec, AddrModeFn mode, uint8_t base_cycles, bool page_penalty) {
     cpu->opcodes[op].exec = exec;
     cpu->opcodes[op].mode = mode;
     cpu->opcodes[op].base_cycles = base_cycles;
     cpu->opcodes[op].page_penalty = page_penalty;
 }
 
-static void build_opcode_table(CPU6507 *cpu) {
+static void build_opcode_table(CPU6502 *cpu) {
     for (int i = 0; i < 256; i++) {
         set_op(cpu, (uint8_t)i, instr_unimplemented, mode_IMP, 2, false);
     }
@@ -606,7 +609,12 @@ static void build_opcode_table(CPU6507 *cpu) {
     set_op(cpu, 0x3B, instr_RLA, mode_ABY_W, 7, false);
 }
 
-void cpu_init(CPU6507 *cpu, Bus *bus) {
+void cpu_init_with_bus(CPU6502 *cpu, CpuBus bus) {
+    if (!cpu || !bus.read || !bus.write || !bus.tick ||
+        !bus.reset_cycles || !bus.get_cycles) {
+        fprintf(stderr, "CPU initialization requires a complete bus interface\n");
+        abort();
+    }
     cpu->bus = bus;
     cpu->A = 0x00;
     cpu->X = 0x00;
@@ -616,6 +624,11 @@ void cpu_init(CPU6507 *cpu, Bus *bus) {
     cpu->status = CPU_FLAG_I | CPU_FLAG_U;
     cpu->extra_cycles = 0;
     cpu->page_crossed = false;
+    cpu->accumulator_mode = false;
+    cpu->irq_asserted = false;
+    cpu->irq_mask_sample = true;
+    cpu->nmi_asserted = false;
+    cpu->nmi_pending = false;
     cpu->hist_idx = 0;
     for (int i = 0; i < 256; i++) {
         cpu->hist[i] = 0;
@@ -624,26 +637,67 @@ void cpu_init(CPU6507 *cpu, Bus *bus) {
     cpu_reset(cpu);
 }
 
-void cpu_reset(CPU6507 *cpu) {
+void cpu_reset(CPU6502 *cpu) {
+    cpu->irq_mask_sample = true;
+    cpu->nmi_pending = false;
+    cpu->status |= CPU_FLAG_I;
     uint8_t low = cpu_read_mem(cpu, 0xFFFCu);
     uint8_t high = cpu_read_mem(cpu, 0xFFFDu);
     cpu->PC = (uint16_t)(((uint16_t)high << 8) | low);
     printf("Reset vector: 0x%04X\n", cpu->PC);
 }
 
-int cpu_step(CPU6507 *cpu) {
+void cpu_set_irq(CPU6502 *cpu, bool asserted) {
+    cpu->irq_asserted = asserted;
+}
+
+void cpu_set_nmi(CPU6502 *cpu, bool asserted) {
+    if (asserted && !cpu->nmi_asserted) {
+        cpu->nmi_pending = true;
+    }
+    cpu->nmi_asserted = asserted;
+}
+
+static void cpu_interrupt(CPU6502 *cpu, uint16_t vector) {
+    (void)cpu_read_mem(cpu, cpu->PC);
+    (void)cpu_read_mem(cpu, cpu->PC);
+    cpu_push_byte(cpu, (uint8_t)(cpu->PC >> 8));
+    cpu_push_byte(cpu, (uint8_t)cpu->PC);
+    cpu_push_byte(cpu, (uint8_t)((cpu->status | CPU_FLAG_U) & ~CPU_FLAG_B));
+    cpu->status |= CPU_FLAG_I;
+    cpu->irq_mask_sample = true;
+    uint8_t low = cpu_read_mem(cpu, vector);
+    uint8_t high = cpu_read_mem(cpu, (uint16_t)(vector + 1u));
+    cpu->PC = (uint16_t)(((uint16_t)high << 8) | low);
+}
+
+int cpu_step(CPU6502 *cpu) {
     cpu->extra_cycles = 0;
     cpu->page_crossed = false;
-    bus_reset_cycles_this_step(cpu->bus);
+    cpu->bus.reset_cycles(cpu->bus.context);
 
+    if (cpu->nmi_pending) {
+        cpu->nmi_pending = false;
+        cpu_interrupt(cpu, 0xFFFAu);
+        return cpu->bus.get_cycles(cpu->bus.context);
+    }
+    if (cpu->irq_asserted && !cpu->irq_mask_sample) {
+        cpu_interrupt(cpu, 0xFFFEu);
+        return cpu->bus.get_cycles(cpu->bus.context);
+    }
+
+    bool previous_irq_mask = cpu_get_flag(cpu, CPU_FLAG_I);
     uint16_t op_pc = cpu->PC;
     uint8_t opcode = cpu_fetch_u8(cpu);
     OpcodeEntry entry = cpu->opcodes[opcode];
+    cpu->accumulator_mode = entry.mode == mode_ACC;
 
     uint16_t target_addr = entry.mode(cpu, entry.page_penalty);
     entry.exec(cpu, target_addr);
+    cpu->irq_mask_sample = (opcode == 0x58u || opcode == 0x78u || opcode == 0x28u)
+        ? previous_irq_mask : cpu_get_flag(cpu, CPU_FLAG_I);
 
-    int actual = bus_get_cycles_this_step(cpu->bus);
+    int actual = cpu->bus.get_cycles(cpu->bus.context);
     int expected = (int)entry.base_cycles + cpu->extra_cycles;
 
     if (actual != expected) {

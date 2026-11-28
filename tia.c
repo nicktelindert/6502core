@@ -53,6 +53,16 @@ static NusizLayout get_nusiz_layout(uint8_t nusiz) {
     }
 }
 
+static bool missile_pixel(int x, int position, int width, NusizLayout layout) {
+    for (int i = 0; i < layout.num_offsets; i++) {
+        int dx = x - (position + layout.offsets[i]);
+        if (dx >= 0 && dx < width) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void compute_ntsc_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
     int hue = (color_byte >> 4) & 0x0F;
     int lum = (color_byte >> 1) & 0x07;
@@ -77,7 +87,27 @@ static void compute_ntsc_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
     out_rgb[2] = (uint8_t)(b > 255 ? 255 : (b < 0 ? 0 : b));
 }
 
+static void compute_pal_rgb(uint8_t color_byte, uint8_t out_rgb[3]) {
+    static const uint8_t pal_hue_to_ntsc[16] = {
+        0, 0, 1, 13, 3, 12, 4, 11,
+        5, 10, 6, 9, 7, 8, 0, 0
+    };
+    uint8_t hue = pal_hue_to_ntsc[color_byte >> 4];
+    compute_ntsc_rgb((uint8_t)((hue << 4) | (color_byte & 0x0Fu)), out_rgb);
+}
+
+void tia_set_video_standard(TIA *tia, VideoStandard standard) {
+    for (int c = 0; c < 256; c++) {
+        if (standard == VIDEO_PAL) {
+            compute_pal_rgb((uint8_t)c, tia->color_lut[c]);
+        } else {
+            compute_ntsc_rgb((uint8_t)c, tia->color_lut[c]);
+        }
+    }
+}
+
 void tia_init(TIA *tia, TIAAudio *audio) {
+    memset(tia, 0, sizeof(*tia));
     tia->framebuffer_capacity = 0;
     tia->framebuffer = NULL;
     tia->frame_height = 0;
@@ -95,9 +125,7 @@ void tia_init(TIA *tia, TIAAudio *audio) {
     tia->y = 0;
     tia->visible_top_line = -1;
 
-    for (int c = 0; c < 256; c++) {
-        compute_ntsc_rgb((uint8_t)c, tia->ntsc_lut[c]);
-    }
+    tia_set_video_standard(tia, VIDEO_NTSC);
 }
 
 uint8_t tia_read(TIA *tia, uint16_t addr) {
@@ -396,7 +424,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
     uint8_t colubk = tia->colubk;
 
     if (!active_grp0 && !active_grp1 && !m0_en && !m1_en && !bl_en && !has_pf) {
-        const uint8_t *bg = tia->ntsc_lut[colubk];
+        const uint8_t *bg = tia->color_lut[colubk];
         fb[idx]     = bg[0];
         fb[idx + 1] = bg[1];
         fb[idx + 2] = bg[2];
@@ -428,23 +456,13 @@ static void tia_render_pixel(TIA *tia, int clk) {
     int m1_x = tia->m1_x;
     int bl_x = tia->bl_x;
 
-    uint8_t pf_bits[40];
-    memset(pf_bits, 0, sizeof(pf_bits));
+    bool pf_on = false;
     if (has_pf) {
-        for (int i = 0; i < 4; i++) {
-            if ((pf0 >> (4 + i)) & 1) pf_bits[i] = 1;
-        }
-        for (int i = 0; i < 8; i++) {
-            if ((pf1 >> (7 - i)) & 1) pf_bits[4 + i] = 1;
-        }
-        for (int i = 0; i < 8; i++) {
-            if ((pf2 >> i) & 1) pf_bits[12 + i] = 1;
-        }
-        if (pf_ref) {
-            for (int i = 0; i < 20; i++) pf_bits[39 - i] = pf_bits[i];
-        } else {
-            for (int i = 0; i < 20; i++) pf_bits[20 + i] = pf_bits[i];
-        }
+        int bit = x >> 2;
+        if (bit >= 20) bit = pf_ref ? 39 - bit : bit - 20;
+        if (bit < 4) pf_on = ((pf0 >> (4 + bit)) & 1u) != 0;
+        else if (bit < 12) pf_on = ((pf1 >> (11 - bit)) & 1u) != 0;
+        else pf_on = ((pf2 >> (bit - 12)) & 1u) != 0;
     }
 
     bool p0_on = false;
@@ -477,24 +495,10 @@ static void tia_render_pixel(TIA *tia, int clk) {
         }
     }
 
-    bool m0_on = false;
-    if (m0_en) {
-        int dx = x - m0_x;
-        if (0 <= dx && dx < m0_w) {
-            m0_on = true;
-        }
-    }
-
-    bool m1_on = false;
-    if (m1_en) {
-        int dx = x - m1_x;
-        if (0 <= dx && dx < m1_w) {
-            m1_on = true;
-        }
-    }
+    bool m0_on = m0_en && missile_pixel(x, m0_x, m0_w, lay0);
+    bool m1_on = m1_en && missile_pixel(x, m1_x, m1_w, lay1);
 
     bool bl_on = bl_en && (0 <= (x - bl_x) && (x - bl_x) < bl_w);
-    bool pf_on = has_pf ? (pf_bits[x >> 2] != 0) : false;
 
     if (p0_on && tia->frame_p0_top_y < 0) {
         tia->frame_p0_top_y = y;
@@ -545,7 +549,7 @@ static void tia_render_pixel(TIA *tia, int clk) {
         else c = colubk;
     }
 
-    const uint8_t *rgb = tia->ntsc_lut[c];
+    const uint8_t *rgb = tia->color_lut[c];
     fb[idx]     = rgb[0];
     fb[idx + 1] = rgb[1];
     fb[idx + 2] = rgb[2];

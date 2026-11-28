@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "video.h"
 
 #define TIA_AUDIO_RATE       31400.0
 #define TIA_OUT_RATE       44100.0
@@ -29,6 +30,7 @@ typedef struct TIAAudio {
 } TIAAudio;
 
 void tia_audio_init(TIAAudio *audio);
+void tia_audio_set_video_standard(TIAAudio *audio, VideoStandard standard);
 void tia_audio_tick_half_scanline(TIAAudio *audio);
 void tia_audio_flush_frame(TIAAudio *audio);
 

@@ -15,8 +15,8 @@ typedef struct {
     uint8_t timer;
     uint16_t interval;   /* 1, 8, 64 of 1024 CPU-cycles per tick */
     uint16_t prescaler;
-    bool after_underflow;
     uint8_t timer_flag;  /* 0x80 wanneer timer is afgelopen */
+    bool wrapped_this_cycle;
 } RIOT;
 
 void riot_init(RIOT *riot);

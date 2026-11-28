@@ -2,7 +2,13 @@ __pycache__/
 *.a26
 .venv
 *.bin
-atari2600
-atari2600_dbg
 6502core
+6502core_rel
 tests/cpu_test
+tests/cpu_bus_test
+tests/system2600_test
+tests/cpu_functional_test
+tests/cartridge_test
+tests/tia_test
+tests/riot_test
+tests/rom_reload_test

@@ -100,6 +100,13 @@ void tia_audio_init(TIAAudio *audio) {
     audio->sample_count = 0;
 }
 
+void tia_audio_set_video_standard(TIAAudio *audio, VideoStandard standard) {
+    audio->step = (TIA_AUDIO_RATE / TIA_OUT_RATE) *
+                  (video_cpu_clock(standard) / video_cpu_clock(VIDEO_NTSC));
+    audio->phase = 0.0;
+    audio->sample_count = 0;
+}
+
 void tia_audio_tick_half_scanline(TIAAudio *audio) {
     if (!audio) {
         return;
