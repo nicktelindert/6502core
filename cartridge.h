@@ -37,7 +37,7 @@ uint32_t cart_crc32(const uint8_t *data, size_t len);
 bool cart_init_from_bytes(Cartridge *cart, const uint8_t *rom_data, size_t size, const char *name);
 void cart_free(Cartridge *cart);
 
-uint8_t cart_read(Cartridge *cart, uint16_t addr);
+uint8_t cart_read(Cartridge *cart, uint16_t addr, uint8_t data_bus);
 void cart_write(Cartridge *cart, uint16_t addr, uint8_t val);
 
 void cart_fe_on_rts_hi(Cartridge *cart, uint8_t hi);

@@ -18,6 +18,7 @@ void bus_init(
     bus->tia_step = tia_step;
     bus->tia_read = tia_read;
     bus->tia_write = tia_write;
+    bus->data_bus = 0;
     bus->cycles_this_step = 0;
 
     for (int i = 0; i < 128; i++) {
@@ -47,45 +48,39 @@ uint8_t bus_read(Bus *bus, uint16_t address) {
 
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     Cartridge *cart = bus->cart;
+    uint8_t value;
 
     /* FE-cartridges gebruiken dit bereik voor RAM. */
     if (cart != NULL && addr >= 0x0100u && addr <= 0x01FFu &&
         cart->type == CART_TYPE_FE) {
         bus_tick(bus, 1);
-        return bus->ram[addr & 0x007Fu];
-    }
-
-    if (addr & 0x1000u) {
+        value = bus->ram[addr & 0x007Fu];
+    } else if (addr & 0x1000u) {
         bus_tick(bus, 1);
-        return cart ? cart_read(cart, addr) : 0xFFu;
-    }
-
-    /* Voor cycle-tick to make DPC work correctly */
-    if ((addr & 0x0280u) == 0x0280u && (addr & 0x001Fu) == 0x04u) {
-        uint8_t value = bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
+        value = cart ? cart_read(cart, addr, bus->data_bus) : 0xFFu;
+    } else if ((addr & 0x0280u) == 0x0280u && (addr & 0x001Fu) == 0x04u) {
+        /* INTIM is read before the cycle tick for DPC timing. */
+        value = bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
         bus_tick(bus, 1);
-        return value;
+    } else {
+        bus_tick(bus, 1);
+        if ((addr & 0x0280u) == 0x0280u) {
+            value = bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
+        } else if ((addr & 0x0280u) == 0x0080u) {
+            value = bus->ram[addr & 0x007Fu];
+        } else {
+            value = (bus->tia_read && bus->tia)
+                ? bus->tia_read(bus->tia, addr)
+                : 0xFFu;
+        }
     }
-
-    bus_tick(bus, 1);
-
-    /* Overige RIOT-registerreads blijven na de cycle-tick. */
-    if ((addr & 0x0280u) == 0x0280u) {
-        return bus->riot ? riot_read(bus->riot, addr) : 0xFFu;
-    }
-
-    /* RIOT RAM: A7=1, A9=0. */
-    if ((addr & 0x0280u) == 0x0080u) {
-        return bus->ram[addr & 0x007Fu];
-    }
-
-    return (bus->tia_read && bus->tia)
-        ? bus->tia_read(bus->tia, addr)
-        : 0xFFu;
+    bus->data_bus = value;
+    return value;
 }
 
 void bus_write(Bus *bus, uint16_t address, uint8_t value) {
     bus_tick(bus, 1);
+    bus->data_bus = value;
 
     uint16_t addr = (uint16_t)(address & 0x1FFFu);
     uint8_t v = value;

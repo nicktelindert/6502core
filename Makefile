@@ -7,6 +7,7 @@ LDFLAGS = -lSDL2
 CORE_SRCS = cpu6507.c addressing.c bus.c tia.c riot.c cartridge.c audio.c
 APP_SRCS = main.c $(CORE_SRCS)
 TEST_BIN = tests/cpu_test
+CART_TEST_BIN = tests/cartridge_test
 
 .PHONY: all test clean
 
@@ -20,8 +21,12 @@ all: 6502core
 $(TEST_BIN): tests/cpu.c $(CORE_SRCS)
 	$(CC) $(CFLAGS) -o $@ tests/cpu.c $(CORE_SRCS) $(LDFLAGS)
 
-test: $(TEST_BIN)
+$(CART_TEST_BIN): tests/cartridge.c $(CORE_SRCS)
+	$(CC) $(CFLAGS) -o $@ tests/cartridge.c $(CORE_SRCS) $(LDFLAGS)
+
+test: $(TEST_BIN) $(CART_TEST_BIN)
 	./$(TEST_BIN)
+	./$(CART_TEST_BIN)
 
 clean:
-	rm -f 6502core $(TEST_BIN)
+	rm -f 6502core $(TEST_BIN) $(CART_TEST_BIN)

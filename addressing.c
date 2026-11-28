@@ -11,6 +11,11 @@ extern uint8_t cpu_read_mem(CPU6507 *cpu, uint16_t address);
 extern uint8_t cpu_fetch_u8(CPU6507 *cpu);
 extern void cpu_set_page_crossed(CPU6507 *cpu, bool crossed);
 
+static void indexed_dummy_read(CPU6507 *cpu, uint16_t base, uint16_t address) {
+    uint16_t uncorrected = (uint16_t)((base & 0xFF00u) | (address & 0x00FFu));
+    (void)cpu_read_mem(cpu, uncorrected);
+}
+
 uint16_t mode_ACC(CPU6507 *cpu, bool page_penalty) {
     (void)page_penalty;
     bus_tick(cpu->bus, 1);
@@ -65,7 +70,7 @@ uint16_t mode_ABX(CPU6507 *cpu, bool page_penalty) {
 
     cpu_set_page_crossed(cpu, crossed);
     if (crossed && page_penalty) {
-        bus_tick(cpu->bus, 1);
+        indexed_dummy_read(cpu, base_addr, addr);
         cpu->extra_cycles += 1;
     }
     return addr;
@@ -80,7 +85,7 @@ uint16_t mode_ABY(CPU6507 *cpu, bool page_penalty) {
 
     cpu_set_page_crossed(cpu, crossed);
     if (crossed && page_penalty) {
-        bus_tick(cpu->bus, 1);
+        indexed_dummy_read(cpu, base_addr, addr);
         cpu->extra_cycles += 1;
     }
     return addr;
@@ -91,8 +96,9 @@ uint16_t mode_ABX_W(CPU6507 *cpu, bool page_penalty) {
     uint8_t low = cpu_fetch_u8(cpu);
     uint8_t high = cpu_fetch_u8(cpu);
     uint16_t base_addr = (uint16_t)(((uint16_t)high << 8) | low);
-    bus_tick(cpu->bus, 1);
-    return (uint16_t)((base_addr + cpu->X) & 0xFFFFu);
+    uint16_t addr = (uint16_t)(base_addr + cpu->X);
+    indexed_dummy_read(cpu, base_addr, addr);
+    return addr;
 }
 
 uint16_t mode_ABY_W(CPU6507 *cpu, bool page_penalty) {
@@ -100,8 +106,9 @@ uint16_t mode_ABY_W(CPU6507 *cpu, bool page_penalty) {
     uint8_t low = cpu_fetch_u8(cpu);
     uint8_t high = cpu_fetch_u8(cpu);
     uint16_t base_addr = (uint16_t)(((uint16_t)high << 8) | low);
-    bus_tick(cpu->bus, 1);
-    return (uint16_t)((base_addr + cpu->Y) & 0xFFFFu);
+    uint16_t addr = (uint16_t)(base_addr + cpu->Y);
+    indexed_dummy_read(cpu, base_addr, addr);
+    return addr;
 }
 
 uint16_t mode_REL(CPU6507 *cpu, bool page_penalty) {
@@ -129,7 +136,7 @@ uint16_t mode_INY(CPU6507 *cpu, bool page_penalty) {
 
     cpu_set_page_crossed(cpu, crossed);
     if (crossed && page_penalty) {
-        bus_tick(cpu->bus, 1);
+        indexed_dummy_read(cpu, base_addr, addr);
         cpu->extra_cycles += 1;
     }
     return addr;
@@ -141,8 +148,9 @@ uint16_t mode_INY_W(CPU6507 *cpu, bool page_penalty) {
     uint8_t low = cpu_read_mem(cpu, zp_addr);
     uint8_t high = cpu_read_mem(cpu, (uint16_t)((zp_addr + 1u) & 0xFFu));
     uint16_t base_addr = (uint16_t)(((uint16_t)high << 8) | low);
-    bus_tick(cpu->bus, 1);
-    return (uint16_t)((base_addr + cpu->Y) & 0xFFFFu);
+    uint16_t addr = (uint16_t)(base_addr + cpu->Y);
+    indexed_dummy_read(cpu, base_addr, addr);
+    return addr;
 }
 
 uint16_t mode_IND(CPU6507 *cpu, bool page_penalty) {

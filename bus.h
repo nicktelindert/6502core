@@ -24,6 +24,7 @@ struct Bus {
     TiaWriteFn tia_write;
 
     uint8_t ram[128];
+    uint8_t data_bus;
     int cycles_this_step;
 };
 

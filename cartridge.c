@@ -697,7 +697,13 @@ void cart_free(Cartridge *cart) {
     cart->rom_size = 0;
 }
 
-uint8_t cart_read(Cartridge *cart, uint16_t addr) {
+uint8_t cart_read(Cartridge *cart, uint16_t addr, uint8_t data_bus) {
+    uint16_t physical_addr = (uint16_t)(addr & 0x1FFFu);
+    if ((cart->type == CART_TYPE_F6SC || cart->type == CART_TYPE_F8SC) &&
+        physical_addr >= 0x1000u && physical_addr <= 0x107Fu) {
+        cart->superchip_ram[physical_addr & 0x007Fu] = data_bus;
+        return data_bus;
+    }
     return cart->read ? cart->read(cart, addr) : 0xFFu;
 }
 
