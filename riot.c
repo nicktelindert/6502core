@@ -77,7 +77,8 @@ uint8_t riot_read(RIOT *riot, uint16_t addr) {
 
 void riot_write(RIOT *riot, uint16_t addr, uint8_t val) {
     uint8_t v = val;
-    uint8_t reg = (uint8_t)(addr & 0x1Fu);
+    /* A2 selects I/O vs timer/edge control; A4 matters only for the latter. */
+    uint8_t reg = (uint8_t)(addr & ((addr & 0x04u) ? 0x17u : 0x03u));
     switch (reg) {
         case 0x00u: /* SWCHA */
             riot->swcha = v;
@@ -92,19 +93,15 @@ void riot_write(RIOT *riot, uint16_t addr, uint8_t val) {
             riot->swbcnt = v;
             break;
         case 0x14u: /* TIM1T */
-        case 0x1Cu:
             riot_set_timer(riot, v, 1u);
             break;
         case 0x15u: /* TIM8T */
-        case 0x1Du:
             riot_set_timer(riot, v, 8u);
             break;
         case 0x16u: /* TIM64T */
-        case 0x1Eu:
             riot_set_timer(riot, v, 64u);
             break;
         case 0x17u: /* T1024T */
-        case 0x1Fu:
             riot_set_timer(riot, v, 1024u);
             break;
         default:

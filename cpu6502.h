@@ -55,6 +55,10 @@ struct CPU6502 {
     int extra_cycles;
     bool page_crossed;
     bool accumulator_mode;
+    bool irq_asserted;
+    bool irq_mask_sample;
+    bool nmi_asserted;
+    bool nmi_pending;
 
     uint16_t hist[256];
     uint8_t hist_idx;
@@ -65,6 +69,9 @@ struct CPU6502 {
 void cpu_init(CPU6502 *cpu, Bus *bus);
 void cpu_init_with_bus(CPU6502 *cpu, CpuBus bus);
 void cpu_reset(CPU6502 *cpu);
+/* asserted=true represents an active (low) input pin. */
+void cpu_set_irq(CPU6502 *cpu, bool asserted);
+void cpu_set_nmi(CPU6502 *cpu, bool asserted);
 int cpu_step(CPU6502 *cpu);
 
 #endif /* CPU6502_H */

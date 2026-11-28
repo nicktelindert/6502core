@@ -225,6 +225,43 @@ static void test_playfield_priority(void) {
     tia_destroy(&tia);
 }
 
+static void test_vertical_delay_latches(void) {
+    TIA tia;
+    setup(&tia);
+    tia.p0_x = 0;
+    tia.p1_x = 16;
+    tia.bl_x = 32;
+    tia_write(&tia, 0x06, 0x0E);
+    tia_write(&tia, 0x07, 0x08);
+    tia_write(&tia, 0x08, 0x04);
+    tia_write(&tia, 0x25, 1);
+    tia_write(&tia, 0x26, 1);
+    tia_write(&tia, 0x27, 1);
+    tia_write(&tia, 0x1B, 0x80);
+    tia_write(&tia, 0x1F, 2);
+    tia_write(&tia, 0x1C, 0x80);
+    tia_write(&tia, 0x1B, 0);
+    tia_write(&tia, 0x1F, 0);
+    CHECK(tia.grp0_old == 0x80);
+    CHECK(tia.grp1_old == 0x80);
+    CHECK(tia.enabl_old == 2);
+    tia_step(&tia, 228);
+    CHECK(pixel_is_color(&tia, 0, 0x0E));
+    CHECK(pixel_is_color(&tia, 16, 0x08));
+    CHECK(pixel_is_color(&tia, 32, 0x04));
+    tia_destroy(&tia);
+}
+
+static void test_motion_register_clear(void) {
+    TIA tia;
+    setup(&tia);
+    for (uint16_t reg = 0x20; reg <= 0x24; reg++) tia_write(&tia, reg, 0x70);
+    tia_write(&tia, 0x2B, 0);
+    CHECK(tia.hmp0 == 0 && tia.hmp1 == 0);
+    CHECK(tia.hmm0 == 0 && tia.hmm1 == 0 && tia.hmbl == 0);
+    tia_destroy(&tia);
+}
+
 /* Manual PDF p. 3: WSYNC remains asserted until horizontal blank. */
 static void test_wsync(void) {
     TIA tia;
@@ -249,6 +286,8 @@ int main(void) {
     test_collisions();
     test_missile_copy_collisions();
     test_playfield_priority();
+    test_vertical_delay_latches();
+    test_motion_register_clear();
     test_wsync();
     puts("TIA tests passed");
     return EXIT_SUCCESS;

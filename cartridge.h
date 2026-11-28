@@ -26,7 +26,7 @@ struct Cartridge {
     int num_banks;           /* 2 voor F8, 4 voor F6/F6SC */
     int current_bank;
 
-    uint8_t superchip_ram[128];
+    uint8_t superchip_ram[256];
     bool has_superchip_ram;
 
     CartReadFn read;

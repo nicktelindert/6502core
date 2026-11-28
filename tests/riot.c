@@ -228,6 +228,39 @@ static void test_riot_read_mirrors(void) {
     }
 }
 
+static void test_riot_write_mirrors(void) {
+    static const uint16_t intervals[] = {1, 8, 64, 1024};
+    for (unsigned region = 0; region < 8; region++) {
+        for (unsigned mirror = 0; mirror < 16; mirror++) {
+            for (unsigned reg = 0; reg < 4; reg++) {
+                uint16_t address = (uint16_t)(region * 0x2000u + 0x280u +
+                                              mirror * 8u + reg);
+                RIOT riot;
+                Bus bus;
+                riot_init(&riot);
+                bus_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
+                bus_write(&bus, address, 0x5A);
+                uint8_t actual[] = {riot.swcha, riot.swacnt, riot.swchb, riot.swbcnt};
+                CHECK(actual[reg] == 0x5A);
+            }
+        }
+        for (unsigned mirror = 0; mirror < 4; mirror++) {
+            for (unsigned mode = 0; mode < 4; mode++) {
+                uint16_t address = (uint16_t)(region * 0x2000u + 0x294u +
+                                              mirror * 0x20u + mode);
+                RIOT riot;
+                Bus bus;
+                riot_init(&riot);
+                bus_init(&bus, NULL, &riot, NULL, NULL, NULL, NULL);
+                bus_write(&bus, address, 0x42);
+                CHECK(riot.timer == 0x42 && riot.interval == intervals[mode]);
+                bus_write(&bus, (uint16_t)(address | 0x08u), 0x37);
+                CHECK(riot.timer == 0x37 && riot.interval == intervals[mode]);
+            }
+        }
+    }
+}
+
 int main(void) {
     test_timer_intervals();
     test_timer_chunking();
@@ -238,6 +271,7 @@ int main(void) {
     test_intim_mirror_timing();
     test_cpu_timer_polling();
     test_riot_read_mirrors();
+    test_riot_write_mirrors();
     puts("RIOT and system timing tests passed");
     return EXIT_SUCCESS;
 }

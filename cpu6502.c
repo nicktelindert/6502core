@@ -312,12 +312,14 @@ static void instr_ADC(CPU6502 *cpu, uint16_t addr) {
         int low = (cpu->A & 0x0F) + (val & 0x0F) + carry_in;
         if (low > 9) low += 6;
         int high = (cpu->A >> 4) + (val >> 4) + (low > 0x0F ? 1 : 0);
-        uint8_t bin_res = (uint8_t)((cpu->A + val + carry_in) & 0xFFu);
-        cpu_set_flag(cpu, CPU_FLAG_V, ((~(cpu->A ^ val) & (cpu->A ^ bin_res)) & 0x80u) != 0);
+        uint8_t binary = (uint8_t)(cpu->A + val + carry_in);
+        uint8_t intermediate = (uint8_t)((high << 4) | (low & 0x0F));
+        cpu_set_flag(cpu, CPU_FLAG_Z, binary == 0);
+        cpu_set_flag(cpu, CPU_FLAG_N, (intermediate & 0x80u) != 0);
+        cpu_set_flag(cpu, CPU_FLAG_V, ((~(cpu->A ^ val) & (cpu->A ^ intermediate)) & 0x80u) != 0);
         if (high > 9) high += 6;
         cpu_set_flag(cpu, CPU_FLAG_C, high > 0x0F);
         cpu->A = (uint8_t)(((high & 0x0F) << 4) | (low & 0x0F));
-        cpu_update_zn(cpu, cpu->A);
         return;
     }
 
@@ -348,7 +350,7 @@ static void instr_SBC(CPU6502 *cpu, uint16_t addr) {
         cpu_set_flag(cpu, CPU_FLAG_C, bin_total > 0xFF);
         cpu_set_flag(cpu, CPU_FLAG_V, ((~(cpu->A ^ raw_val) & (cpu->A ^ bin_res)) & 0x80u) != 0);
         cpu->A = (uint8_t)(((high & 0x0F) << 4) | (low & 0x0F));
-        cpu_update_zn(cpu, cpu->A);
+        cpu_update_zn(cpu, bin_res);
         return;
     }
 
@@ -623,6 +625,10 @@ void cpu_init_with_bus(CPU6502 *cpu, CpuBus bus) {
     cpu->extra_cycles = 0;
     cpu->page_crossed = false;
     cpu->accumulator_mode = false;
+    cpu->irq_asserted = false;
+    cpu->irq_mask_sample = true;
+    cpu->nmi_asserted = false;
+    cpu->nmi_pending = false;
     cpu->hist_idx = 0;
     for (int i = 0; i < 256; i++) {
         cpu->hist[i] = 0;
@@ -632,10 +638,37 @@ void cpu_init_with_bus(CPU6502 *cpu, CpuBus bus) {
 }
 
 void cpu_reset(CPU6502 *cpu) {
+    cpu->irq_mask_sample = true;
+    cpu->nmi_pending = false;
+    cpu->status |= CPU_FLAG_I;
     uint8_t low = cpu_read_mem(cpu, 0xFFFCu);
     uint8_t high = cpu_read_mem(cpu, 0xFFFDu);
     cpu->PC = (uint16_t)(((uint16_t)high << 8) | low);
     printf("Reset vector: 0x%04X\n", cpu->PC);
+}
+
+void cpu_set_irq(CPU6502 *cpu, bool asserted) {
+    cpu->irq_asserted = asserted;
+}
+
+void cpu_set_nmi(CPU6502 *cpu, bool asserted) {
+    if (asserted && !cpu->nmi_asserted) {
+        cpu->nmi_pending = true;
+    }
+    cpu->nmi_asserted = asserted;
+}
+
+static void cpu_interrupt(CPU6502 *cpu, uint16_t vector) {
+    (void)cpu_read_mem(cpu, cpu->PC);
+    (void)cpu_read_mem(cpu, cpu->PC);
+    cpu_push_byte(cpu, (uint8_t)(cpu->PC >> 8));
+    cpu_push_byte(cpu, (uint8_t)cpu->PC);
+    cpu_push_byte(cpu, (uint8_t)((cpu->status | CPU_FLAG_U) & ~CPU_FLAG_B));
+    cpu->status |= CPU_FLAG_I;
+    cpu->irq_mask_sample = true;
+    uint8_t low = cpu_read_mem(cpu, vector);
+    uint8_t high = cpu_read_mem(cpu, (uint16_t)(vector + 1u));
+    cpu->PC = (uint16_t)(((uint16_t)high << 8) | low);
 }
 
 int cpu_step(CPU6502 *cpu) {
@@ -643,6 +676,17 @@ int cpu_step(CPU6502 *cpu) {
     cpu->page_crossed = false;
     cpu->bus.reset_cycles(cpu->bus.context);
 
+    if (cpu->nmi_pending) {
+        cpu->nmi_pending = false;
+        cpu_interrupt(cpu, 0xFFFAu);
+        return cpu->bus.get_cycles(cpu->bus.context);
+    }
+    if (cpu->irq_asserted && !cpu->irq_mask_sample) {
+        cpu_interrupt(cpu, 0xFFFEu);
+        return cpu->bus.get_cycles(cpu->bus.context);
+    }
+
+    bool previous_irq_mask = cpu_get_flag(cpu, CPU_FLAG_I);
     uint16_t op_pc = cpu->PC;
     uint8_t opcode = cpu_fetch_u8(cpu);
     OpcodeEntry entry = cpu->opcodes[opcode];
@@ -650,6 +694,8 @@ int cpu_step(CPU6502 *cpu) {
 
     uint16_t target_addr = entry.mode(cpu, entry.page_penalty);
     entry.exec(cpu, target_addr);
+    cpu->irq_mask_sample = (opcode == 0x58u || opcode == 0x78u || opcode == 0x28u)
+        ? previous_irq_mask : cpu_get_flag(cpu, CPU_FLAG_I);
 
     int actual = cpu->bus.get_cycles(cpu->bus.context);
     int expected = (int)entry.base_cycles + cpu->extra_cycles;

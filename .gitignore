@@ -6,6 +6,8 @@ __pycache__/
 6502core_rel
 tests/cpu_test
 tests/cpu_bus_test
+tests/system2600_test
+tests/cpu_functional_test
 tests/cartridge_test
 tests/tia_test
 tests/riot_test

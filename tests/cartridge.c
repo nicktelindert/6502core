@@ -151,6 +151,80 @@ static void test_fe_subroutine_bank_switch(void) {
     CHECK(cart.current_bank == 1);
 }
 
+static void test_fa_ram_and_banks(void) {
+    uint8_t rom[3 * 4096];
+    for (size_t i = 0; i < sizeof(rom); i++) {
+        rom[i] = (uint8_t)((i * 13 + (i >> 12) * 31) & 0xFF);
+    }
+    Cartridge cart;
+    Bus bus;
+    CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "FA test"));
+    CHECK(cart.type == CART_TYPE_FA);
+    bus_init(&bus, NULL, NULL, &cart, NULL, NULL, NULL);
+    for (unsigned offset = 0; offset < 256; offset++) {
+        bus_write(&bus, (uint16_t)(0xF000 + offset), (uint8_t)(offset ^ 0xA5));
+    }
+    for (unsigned bank = 0; bank < 3; bank++) {
+        bus_write(&bus, (uint16_t)(0xFFF8 + bank), 0);
+        CHECK(cart.current_bank == (int)bank);
+        for (unsigned offset = 0; offset < 256; offset++) {
+            CHECK(bus_read(&bus, (uint16_t)(0xF100 + offset)) == (uint8_t)(offset ^ 0xA5));
+        }
+        CHECK(bus_read(&bus, 0xF200) == rom[bank * 4096 + 0x200]);
+        CHECK(bus_read(&bus, (uint16_t)(0x1FF8 + bank)) == rom[bank * 4096 + 0xFF8 + bank]);
+        CHECK(cart.current_bank == (int)bank);
+    }
+    cart_free(&cart);
+}
+
+static void test_f8_rom_banks(void) {
+    uint8_t rom[2 * 4096];
+    for (size_t i = 0; i < sizeof(rom); i++) {
+        rom[i] = (uint8_t)((i * 13 + (i >> 12) * 31) & 0xFF);
+    }
+    Cartridge cart;
+    Bus bus;
+    CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "F8 test"));
+    CHECK(cart.type == CART_TYPE_F8);
+    bus_init(&bus, NULL, NULL, &cart, NULL, NULL, NULL);
+    for (unsigned mirror = 0; mirror < 8; mirror++) {
+        for (unsigned bank = 0; bank < 2; bank++) {
+            uint16_t hotspot = (uint16_t)(0x1FF8 + mirror * 0x2000 + bank);
+            bus_write(&bus, (uint16_t)(0xFFF8 + (bank ^ 1)), 0);
+            CHECK(bus_read(&bus, hotspot) == rom[bank * 4096 + 0xFF8 + bank]);
+            CHECK(cart.current_bank == (int)bank);
+            bus_write(&bus, (uint16_t)(0xFFF8 + (bank ^ 1)), 0);
+            bus_write(&bus, hotspot, 0x5A);
+            CHECK(cart.current_bank == (int)bank);
+            CHECK(bus_read(&bus, 0xF200) == rom[bank * 4096 + 0x200]);
+        }
+    }
+    cart_free(&cart);
+}
+
+static void test_unbanked_rom_mirrors(void) {
+    uint8_t rom[4096];
+    for (size_t i = 0; i < sizeof(rom); i++) {
+        rom[i] = (uint8_t)((i * 13 + (i >> 8) * 7) & 0xFF);
+    }
+    for (size_t size = 2048; size <= 4096; size *= 2) {
+        Cartridge cart;
+        Bus bus;
+        CHECK(cart_init_from_bytes(&cart, rom, size, "unbanked test"));
+        CHECK(cart.type == (size == 2048 ? CART_TYPE_2K : CART_TYPE_4K));
+        bus_init(&bus, NULL, NULL, &cart, NULL, NULL, NULL);
+        for (unsigned mirror = 0; mirror < 8; mirror++) {
+            for (unsigned offset = 0; offset < 4096; offset++) {
+                uint16_t address = (uint16_t)(0x1000u + mirror * 0x2000u + offset);
+                CHECK(bus_read(&bus, address) == rom[offset % size]);
+            }
+        }
+        bus_write(&bus, 0xF200, 0xEE);
+        CHECK(bus_read(&bus, 0xF200) == rom[0x200]);
+        cart_free(&cart);
+    }
+}
+
 static void test_f6sc_all_mirrors(void) {
     Cartridge cart;
     Bus bus;
@@ -370,6 +444,9 @@ int main(void) {
     test_f6sc_cpu_hotspots();
     test_branch_dummy_hotspot();
     test_fe_subroutine_bank_switch();
+    test_fa_ram_and_banks();
+    test_f8_rom_banks();
+    test_unbanked_rom_mirrors();
     test_f6sc_all_mirrors();
     test_f6sc_shared_ram();
     test_f6sc_bit_rom_switch();

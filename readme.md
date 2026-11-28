@@ -9,6 +9,8 @@ The `CPU6502` core in `cpu6502.c` accesses memory and timing through the `CpuBus
 
 This separation is a foundation, not Atari 5200 or 7800 support. Those systems still need their own memory maps, chips, interrupt and timing behavior, and cartridge handling. The current CPU is not yet a complete or cycle-exact implementation for those machines.
 
+The shared core models NMOS decimal ADC/SBC and exposes `cpu_set_irq` and `cpu_set_nmi` with `true` meaning an asserted active-low input. IRQ is level-sensitive; NMI latches an assertion edge. Interrupt entry uses the 6502 vectors and stack sequence, and CLI, SEI and PLP use the preceding interrupt-mask state for the next boundary. Input changes are serviced at instruction boundaries; exact interrupt sampling during individual cycles, interrupt hijacking, and 5200-specific DMA/HALT/RDY behavior are not yet modeled. The Atari 2600 does not connect these interrupt inputs.
+
 ## Rewritten TIA (Color-Clock Accuracy)
 After researching and documenting the hardware behavior, I rewrote the TIA to render at the **color-clock level**. This provides more accurate video and audio timing than the earlier scanline-based approach. Scanline tracking remains useful for frame bookkeeping, but it does not replace color-clock rendering.
 
@@ -17,7 +19,11 @@ Run `make test` for CPU cycle tests and synthetic F6SC/F8SC cartridge tests. The
 
 The standalone CPU bus test links only the CPU and addressing code and checks a full 16-bit test memory without Atari 2600 hardware.
 
-I also added extended testing for the riot timer, tia and rom reloaded because i had issues with the timing after reloaded certain roms.
+It also tests interrupt entry, priority, masking and stack behavior, representative NMOS decimal flags, and all 40,000 valid BCD ADC/SBC combinations with both carry inputs. For an additional independent test, supply the separately obtained `bin_files/6502_functional_test.bin` from [Klaus Dormann's 6502 functional tests](https://github.com/Klaus2m5/6502_65C02_functional_tests) and run `make test-functional FUNCTIONAL_ROM=/path/to/6502_functional_test.bin`. The runner expects the 64 KB image from commit `7954e2dbb49c469ea286070bf46cdd71aeb29e4b` (SHA-256 `fa12bfc761e6f9057e4cc01a665a7b800ff01ae91f598af1e39a1201d01953fd`); that test covers official instructions but not all interrupt, undocumented-opcode or cycle-level behavior.
+
+The Atari 2600 system tests check all 65,536 CPU addresses against the TIA, RIOT, RAM and cartridge bus decoding and 13-bit mirrors. A synthetic cartridge exercises reset, instructions, RAM, TIA and RIOT together; another checks a WSYNC stall and RIOT timing. Cartridge tests cover 2K/4K ROM mirrors, F8 and F6SC bank switching, F8SC/F6SC RAM, and FA's 256-byte RAM. RIOT tests cover timer intervals and underflow, I/O and timer write mirrors. TIA tests cover player/missile copies, collisions, priority, reflection, vertical delay and WSYNC. A reload test verifies TIA state is reset between cartridges.
+
+These are regression tests, not complete Atari 2600 certification. They do not cover every cartridge mapper, TIA mid-scanline and audio behavior, all CPU dummy bus accesses, or all RIOT I/O behavior. Timer phase follows Stella's implementation and has not been independently verified on hardware. The separate 6502 functional suite runs on flat 64 KB memory, not on the 2600's mirrored bus.
 
 ## Bugs
 - [ ] Dig Dug sometimes misses enemies? (timing issues?)
