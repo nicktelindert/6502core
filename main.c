@@ -549,7 +549,13 @@ int main(int argc, char **argv) {
 
         if (emu.loaded) {
             handle_input(&emu);
-            bus_step_frame(&emu.bus, &emu.cpu);
+            if (!bus_step_frame(&emu.bus, &emu.cpu)) {
+                fprintf(stderr, "Frame synchronization failed for %s (PC=%04X, scanline=%d)\n",
+                        emu.cart.name, emu.cpu.PC, emu.tia.scanline);
+                emu_destroy(&emu);
+                if (audio_dev > 0) SDL_ClearQueuedAudio(audio_dev);
+                continue;
+            }
 
             int completed_height = emu.tia.completed_frame_height;
 

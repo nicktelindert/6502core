@@ -46,7 +46,7 @@ static DpcState dpc;
 static void dpc_reset_state(const uint8_t *rom_data, size_t size) {
     memset(&dpc, 0, sizeof(dpc));
     dpc.random_number = 0x01u;
-    dpc.music_pitch = 1.0;
+    dpc.music_pitch = 20000.0; /* Stella default DPC oscillator frequency */
     dpc.clock_rate = 1193191.66666667; /* Stella NTSC */
 
     if (rom_data && size >= 0x2800u) {
@@ -70,9 +70,6 @@ static void dpc_update_flag(int f) {
         dpc.flags[f] = 0x00u;
     }
 }
-
-#define DPC_MUSIC_PERIOD_CPU_CYCLES 38u
-
 
 static void dpc_update_music_fetchers(void) {
     uint64_t cycles = dpc.total_cycles - dpc.audio_cycles;

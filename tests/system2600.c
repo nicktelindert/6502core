@@ -169,7 +169,7 @@ static void test_wsync_system_stall(void) {
     riot_write(&riot, 0x294, 200);
     observed_riot = &riot;
     vsync_clock = vsync_scanline = vsync_timer = -1;
-    bus_step_frame(&bus, &cpu);
+    CHECK(bus_step_frame(&bus, &cpu));
     CHECK(vsync_scanline == 1);
     CHECK(vsync_clock == 15);
     CHECK(vsync_timer == 129);
@@ -178,10 +178,32 @@ static void test_wsync_system_stall(void) {
     cart_free(&cart);
 }
 
+static void test_missing_vsync_is_bounded(void) {
+    TIA tia;
+    RIOT riot;
+    Bus bus;
+    CPU6502 cpu;
+    tia_init(&tia, NULL);
+    riot_init(&riot);
+    bus_init(&bus, &tia, &riot, NULL, tia_step, tia_read, tia_write);
+    cpu_init(&cpu, &bus);
+    bus.ram[0] = 0x4C; /* JMP $0080 */
+    bus.ram[1] = 0x80;
+    bus.ram[2] = 0x00;
+    cpu.PC = 0x0080;
+    tia.scanline = BUS_MAX_FRAME_SCANLINES - 1;
+    tia.clock = 225;
+    CHECK(!bus_step_frame(&bus, &cpu));
+    CHECK(!tia.frame_ready);
+    CHECK(tia.scanline == BUS_MAX_FRAME_SCANLINES);
+    tia_destroy(&tia);
+}
+
 int main(void) {
     test_address_decode();
     test_synthetic_cartridge_program();
     test_wsync_system_stall();
+    test_missing_vsync_is_bounded();
     puts("Atari 2600 system integration tests passed");
     return EXIT_SUCCESS;
 }

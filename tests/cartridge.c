@@ -385,6 +385,73 @@ static void test_3f_banks_and_tia(void) {
     cart_free(&cart);
 }
 
+static void test_dpc_registers_and_banks(void) {
+    uint8_t rom[10240] = {0};
+    rom[0x0200] = 0x12;
+    rom[0x1200] = 0x34;
+    rom[0x2000] = 0x56;
+    rom[0x27FF] = 0x78;
+    Cartridge cart;
+    Bus bus;
+    CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "DPC test"));
+    CHECK(cart.type == CART_TYPE_DPC);
+    bus_init(&bus, NULL, NULL, &cart, NULL, NULL, NULL);
+    CHECK(bus_read(&bus, 0xF200) == 0x34);
+    bus_write(&bus, 0xFFF8, 0);
+    CHECK(bus_read(&bus, 0xF200) == 0x12);
+    (void)bus_read(&bus, 0x1FF9);
+    CHECK(bus_read(&bus, 0xF200) == 0x34);
+    bus_write(&bus, 0x1050, 0);
+    bus_write(&bus, 0x1058, 0);
+    CHECK(bus_read(&bus, 0x1008) == 0x78);
+    CHECK(bus_read(&bus, 0x1008) == 0x56);
+    bus_write(&bus, 0x1040, 2);
+    bus_write(&bus, 0x1048, 1);
+    bus_write(&bus, 0x1050, 2);
+    bus_write(&bus, 0x1058, 0);
+    CHECK(bus_read(&bus, 0x1038) == 0xFF);
+    CHECK(bus_read(&bus, 0x1038) == 0);
+    bus_write(&bus, 0x1045, 4);
+    bus_write(&bus, 0x104D, 1);
+    bus_write(&bus, 0x105D, 0x10);
+    bus_write(&bus, 0x1055, 0);
+    bus_tick(&bus, 60);
+    CHECK(bus_read(&bus, 0x1004) == 4);
+    cart_free(&cart);
+}
+
+static void test_dpc_power_on_timer_polling(void) {
+    uint8_t rom[10240] = {0};
+    const uint8_t program[] = {
+        0xAD, 0x06, 0x10, /* LDA $1006 */
+        0x85, 0x19,       /* STA $19 */
+        0xAD, 0x84, 0x02, /* LDA $0284 */
+        0xD0, 0xF6,       /* BNE loop */
+        0xA9, 0x02,       /* LDA #$02 */
+        0x85, 0x00,       /* STA VSYNC */
+        0x4C, 0x0E, 0xF1 /* JMP $F10E */
+    };
+    for (size_t i = 0; i < sizeof(program); i++) rom[0x1100 + i] = program[i];
+    rom[0x1FFC] = 0x00;
+    rom[0x1FFD] = 0xF1;
+    Cartridge cart;
+    Bus bus;
+    TIA tia;
+    RIOT riot;
+    CPU6502 cpu;
+    CHECK(cart_init_from_bytes(&cart, rom, sizeof(rom), "DPC timer test"));
+    CHECK(cart.type == CART_TYPE_DPC);
+    tia_init(&tia, NULL);
+    riot_init(&riot);
+    bus_init(&bus, &tia, &riot, &cart, tia_step, tia_read, tia_write);
+    cpu_init(&cpu, &bus);
+    for (unsigned i = 0; i < 100000 && !tia.frame_ready; i++) cpu_step(&cpu);
+    CHECK(tia.frame_ready);
+    CHECK(tia.completed_frame_height > 0);
+    tia_destroy(&tia);
+    cart_free(&cart);
+}
+
 static void test_unbanked_rom_mirrors(void) {
     uint8_t rom[4096];
     for (size_t i = 0; i < sizeof(rom); i++) {
@@ -633,6 +700,8 @@ int main(void) {
     test_e0_slices();
     test_ef_banks();
     test_3f_banks_and_tia();
+    test_dpc_registers_and_banks();
+    test_dpc_power_on_timer_polling();
     test_unbanked_rom_mirrors();
     test_f6sc_all_mirrors();
     test_f6sc_shared_ram();

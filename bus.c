@@ -165,14 +165,17 @@ void bus_reset_cycles_this_step(Bus *bus) {
     bus->cycles_this_step = 0;
 }
 
-void bus_step_frame(Bus *bus, CPU6502 *cpu) {
+bool bus_step_frame(Bus *bus, CPU6502 *cpu) {
     if (!bus || !bus->tia || !cpu) {
-        return;
+        return false;
     }
 
     bus->tia->frame_ready = false;
 
     while (!bus->tia->frame_ready) {
+        if (bus->tia->scanline >= BUS_MAX_FRAME_SCANLINES) {
+            return false;
+        }
         if (bus->tia->wsync) {
             int clk = bus->tia->clock;
             int remaining = 228 - clk;
@@ -192,4 +195,5 @@ void bus_step_frame(Bus *bus, CPU6502 *cpu) {
             cpu_step(cpu);
         }
     }
+    return true;
 }

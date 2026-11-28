@@ -15,8 +15,9 @@ void riot_init(RIOT *riot) {
     riot->swchb = 0xFFu;
     riot->swbcnt = 0x00u;
 
-    riot->timer = 0x00u;
-    riot->interval = 1u;
+    /* Power-on timer contents are unspecified; use a reproducible value. */
+    riot->timer = 0x80u;
+    riot->interval = 1024u;
     riot->prescaler = 0u;
     riot->timer_flag = 0x00u;
     riot->wrapped_this_cycle = false;

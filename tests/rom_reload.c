@@ -52,6 +52,27 @@ int main(void) {
     CHECK(emu_load_rom(&emu, path));
     check_fresh_tia(&emu.tia);
     emu_destroy(&emu);
+
+    uint8_t dpc_rom[10240] = {0};
+    const uint8_t program[] = {
+        0xAD, 0x06, 0x10, 0x85, 0x19,
+        0xAD, 0x84, 0x02, 0xD0, 0xF6,
+        0xA9, 0x02, 0x85, 0x00, 0x4C, 0x0E, 0xF1
+    };
+    memcpy(dpc_rom + 0x1100, program, sizeof(program));
+    dpc_rom[0x1FFC] = 0x00;
+    dpc_rom[0x1FFD] = 0xF1;
+    rom_file = fopen(path, "wb");
+    CHECK(rom_file != NULL);
+    CHECK(fwrite(dpc_rom, 1, sizeof(dpc_rom), rom_file) == sizeof(dpc_rom));
+    CHECK(fclose(rom_file) == 0);
+    for (int i = 0; i < 2; i++) {
+        CHECK(emu_load_rom(&emu, path));
+        CHECK(emu.cart.type == CART_TYPE_DPC);
+        CHECK(bus_step_frame(&emu.bus, &emu.cpu));
+        CHECK(emu.tia.completed_frame_height > 0);
+    }
+    emu_destroy(&emu);
     CHECK(unlink(path) == 0);
     puts("ROM reload test passed");
     return EXIT_SUCCESS;

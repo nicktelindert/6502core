@@ -14,6 +14,18 @@
 } while (0)
 
 /* Timer phase follows Stella's M6532 implementation. */
+static void test_power_on_timer(void) {
+    RIOT riot;
+    riot_init(&riot);
+    CHECK(riot.timer == 0x80);
+    CHECK(riot.interval == 1024);
+    CHECK(riot.prescaler == 0);
+    riot_step(&riot, 1023);
+    CHECK(riot_read(&riot, 0x284) == 0x80);
+    riot_step(&riot, 1);
+    CHECK(riot_read(&riot, 0x284) == 0x7F);
+}
+
 static void test_timer_intervals(void) {
     static const int intervals[] = {1, 8, 64, 1024};
     for (int i = 0; i < 4; i++) {
@@ -262,6 +274,7 @@ static void test_riot_write_mirrors(void) {
 }
 
 int main(void) {
+    test_power_on_timer();
     test_timer_intervals();
     test_timer_chunking();
     test_timer_underflow_reads_and_writes();

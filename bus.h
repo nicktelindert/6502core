@@ -45,6 +45,9 @@ void bus_write(Bus *bus, uint16_t address, uint8_t value);
 int bus_get_cycles_this_step(const Bus *bus);
 void bus_reset_cycles_this_step(Bus *bus);
 
-void bus_step_frame(Bus *bus, CPU6502 *cpu);
+#define BUS_MAX_FRAME_SCANLINES 32768
+
+/* Returns false when no frame sync occurs within the scanline limit. */
+bool bus_step_frame(Bus *bus, CPU6502 *cpu);
 
 #endif /* BUS_H */
